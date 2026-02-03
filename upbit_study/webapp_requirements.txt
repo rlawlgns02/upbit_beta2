@@ -1,0 +1,6 @@
+# 웹앱 추가 패키지
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+websockets==12.0
+aiofiles==23.2.1
+jinja2==3.1.2

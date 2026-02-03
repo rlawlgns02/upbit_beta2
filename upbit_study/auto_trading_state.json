@@ -1,0 +1,20 @@
+{
+  "is_running": true,
+  "total_investment": 50000.0,
+  "coin_count": 0,
+  "analysis_mode": "volume_top50",
+  "coin_category": "meme",
+  "trading_interval": 60,
+  "allocation_mode": "weighted",
+  "target_profit_percent": 10.0,
+  "stop_loss_percent": 10.0,
+  "start_time": "2026-01-31T00:13:57.361978",
+  "start_balance": 99987.87356675,
+  "current_balance": 49962.8735759,
+  "profit": -50024.99999085,
+  "profit_rate": -50.03106697479096,
+  "positions": {},
+  "selected_coins": [],
+  "trade_history": [],
+  "saved_at": "2026-01-31T00:15:46.177313"
+}

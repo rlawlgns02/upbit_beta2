@@ -1,0 +1,2230 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>업비트 종목 분석 시스템</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- ApexCharts -->
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+
+    <style>
+        * { font-family: 'Inter', sans-serif; }
+
+        .status-green { color: #10b981; }
+        .status-red { color: #ef4444; }
+
+        .card {
+            background: white;
+            border: 1px solid #e5e7eb;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .progress-bar {
+            transition: width 0.3s ease;
+        }
+
+        /* AI 분석 로딩바 애니메이션 */
+        @keyframes loading-bar {
+            0% { transform: translateX(-100%); }
+            50% { transform: translateX(0%); }
+            100% { transform: translateX(100%); }
+        }
+
+        .animate-loading-bar {
+            animation: loading-bar 1.5s ease-in-out infinite;
+        }
+
+        /* 슬라이더 스타일 */
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            height: 12px;
+            border-radius: 6px;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        input[type="range"].accent-green-500::-webkit-slider-thumb {
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+        }
+
+        input[type="range"].accent-red-500::-webkit-slider-thumb {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+        }
+
+        /* Firefox 슬라이더 스타일 */
+        input[type="range"]::-moz-range-thumb {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+        }
+    </style>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#2563eb',
+                        secondary: '#64748b',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-50" x-data="app()">
+    <!-- 헤더 -->
+    <header class="bg-white border-b">
+        <div class="container mx-auto px-6 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 bg-blue-600 rounded flex items-center justify-center">
+                        <i class="fas fa-chart-line text-white"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-bold text-gray-900">업비트 종목 분석</h1>
+                        <p class="text-sm text-gray-500">실시간 시장 데이터 분석 시스템</p>
+                    </div>
+                </div>
+
+                <div class="flex items-center space-x-4">
+                    <div class="flex items-center space-x-2 text-sm">
+                        <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                        <span class="text-gray-600">실시간 연결</span>
+                    </div>
+                    <span class="text-sm text-gray-500" x-text="currentTime"></span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- 메인 컨텐츠 -->
+    <main class="container mx-auto px-6 py-8">
+        <!-- 실시간 주요 코인 -->
+        <section class="mb-8">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-semibold text-gray-900">주요 종목 실시간 시세</h2>
+                <button @click="showMarketSelector = true"
+                        class="text-gray-400 hover:text-gray-600 transition"
+                        title="종목 설정">
+                    <i class="fas fa-cog"></i>
+                </button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                <template x-for="coin in realtimeData" :key="coin.market">
+                    <div class="card rounded-lg p-4 hover:shadow-md transition">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-sm font-medium text-gray-700" x-text="coin.market"></span>
+                            <span class="text-xs px-2 py-1 rounded"
+                                  :class="coin.change_rate > 0 ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'"
+                                  x-text="(coin.change_rate > 0 ? '+' : '') + coin.change_rate.toFixed(2) + '%'"></span>
+                        </div>
+                        <p class="text-xl font-bold text-gray-900 mb-1" x-text="formatPrice(coin.price)"></p>
+                        <p class="text-xs text-gray-500">거래량: <span x-text="formatVolume(coin.volume)"></span></p>
+                    </div>
+                </template>
+            </div>
+        </section>
+
+        <!-- 탭 메뉴 -->
+        <div class="bg-white rounded-lg border mb-6">
+            <div class="flex border-b">
+                <button @click="activeTab = 'recommendations'"
+                        :class="activeTab === 'recommendations' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'"
+                        class="px-6 py-3 font-medium transition">
+                    추천 종목
+                </button>
+                <button @click="activeTab = 'all-markets'"
+                        :class="activeTab === 'all-markets' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'"
+                        class="px-6 py-3 font-medium transition">
+                    전체 종목
+                </button>
+                <button @click="activeTab = 'news'"
+                        :class="activeTab === 'news' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'"
+                        class="px-6 py-3 font-medium transition">
+                    <i class="fas fa-newspaper mr-1"></i> 뉴스 분석
+                </button>
+                <button @click="activeTab = 'trading'; checkApiConnection(); loadCoinPreview()"
+                        :class="activeTab === 'trading' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'"
+                        class="px-6 py-3 font-medium transition">
+                    <i class="fas fa-robot mr-1"></i> 자동매매
+                </button>
+                <button @click="activeTab = 'settings'"
+                        :class="activeTab === 'settings' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'"
+                        class="px-6 py-3 font-medium transition">
+                    설정
+                </button>
+            </div>
+
+            <!-- 추천 종목 -->
+            <div x-show="activeTab === 'recommendations'" class="p-6">
+                <div class="flex items-center justify-between mb-6">
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-900">기술적 분석 기반 추천</h3>
+                        <p class="text-sm text-gray-500 mt-1">
+                            <span x-show="analysisMode === 'all'">전체 235개 종목 분석 (약 2~3분 소요)</span>
+                            <span x-show="analysisMode === 'volume_top100'">거래량 상위 100개 종목 분석 (약 1분 소요)</span>
+                            <span x-show="analysisMode === 'volume_top50'">거래량 상위 50개 종목 분석 (약 30초 소요)</span>
+                        </p>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <!-- 모드 선택 버튼 -->
+                        <div class="flex bg-gray-100 rounded-lg p-1">
+                            <button @click="analysisMode = 'all'"
+                                    :class="analysisMode === 'all' ? 'bg-white shadow text-blue-600 font-semibold' : 'text-gray-600'"
+                                    class="px-3 py-1.5 text-sm rounded transition">
+                                전체
+                            </button>
+                            <button @click="analysisMode = 'volume_top100'"
+                                    :class="analysisMode === 'volume_top100' ? 'bg-white shadow text-blue-600 font-semibold' : 'text-gray-600'"
+                                    class="px-3 py-1.5 text-sm rounded transition">
+                                Top 100
+                            </button>
+                            <button @click="analysisMode = 'volume_top50'"
+                                    :class="analysisMode === 'volume_top50' ? 'bg-white shadow text-blue-600 font-semibold' : 'text-gray-600'"
+                                    class="px-3 py-1.5 text-sm rounded transition">
+                                Top 50
+                            </button>
+                        </div>
+                        <button @click="loadRecommendationsWithProgress()"
+                                :disabled="loading"
+                                class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:bg-gray-400">
+                            <i class="fas fa-sync-alt mr-2" :class="{'fa-spin': loading}"></i>
+                            <span x-text="loading ? '분석 중...' : '새로고침'"></span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 진행률 표시 -->
+                <div x-show="loading" class="mb-6">
+                    <div class="bg-gray-100 rounded-lg p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-sm font-medium text-gray-700">
+                                <span x-text="progressCurrent"></span> / <span x-text="progressTotal"></span> 종목 분석 중
+                            </span>
+                            <span class="text-sm text-gray-600" x-text="progressPercent + '%'"></span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-2">
+                            <div class="bg-blue-600 h-2 rounded-full progress-bar"
+                                 :style="'width: ' + progressPercent + '%'"></div>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-2">
+                            현재: <span class="font-medium" x-text="progressMarket"></span>
+                        </p>
+                    </div>
+                </div>
+
+                <!-- 추천 테이블 -->
+                <div x-show="!loading && recommendations.length > 0" class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead class="bg-gray-50 border-b">
+                            <tr>
+                                <th class="text-left py-3 px-4 text-sm font-semibold text-gray-700">순위</th>
+                                <th class="text-left py-3 px-4 text-sm font-semibold text-gray-700">종목</th>
+                                <th class="text-right py-3 px-4 text-sm font-semibold text-gray-700">현재가</th>
+                                <th class="text-right py-3 px-4 text-sm font-semibold text-gray-700">매수가</th>
+                                <th class="text-right py-3 px-4 text-sm font-semibold text-gray-700">매도가</th>
+                                <th class="text-right py-3 px-4 text-sm font-semibold text-gray-700">RSI</th>
+                                <th class="text-center py-3 px-4 text-sm font-semibold text-gray-700">추천</th>
+                                <th class="text-center py-3 px-4 text-sm font-semibold text-gray-700">점수</th>
+                                <th class="text-center py-3 px-4 text-sm font-semibold text-gray-700">상세</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="(item, index) in recommendations" :key="item.market">
+                                <tr class="border-b hover:bg-gray-50 transition">
+                                    <td class="py-3 px-4">
+                                        <span class="inline-flex items-center justify-center w-8 h-8 rounded-full text-sm font-bold"
+                                              :class="index === 0 ? 'bg-yellow-100 text-yellow-700' : index === 1 ? 'bg-gray-200 text-gray-700' : index === 2 ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-600'"
+                                              x-text="index + 1"></span>
+                                    </td>
+                                    <td class="py-3 px-4">
+                                        <div class="font-semibold text-gray-900" x-text="item.market"></div>
+                                        <div class="text-xs text-gray-500" x-text="item.name"></div>
+                                    </td>
+                                    <td class="py-3 px-4 text-right font-mono text-sm">
+                                        <span x-text="formatPrice(item.current_price)"></span>
+                                    </td>
+                                    <td class="py-3 px-4 text-right font-mono text-sm">
+                                        <span class="text-blue-600 font-semibold" x-text="item.trade_prices ? formatPrice(item.trade_prices.buy_price) : '-'"></span>
+                                    </td>
+                                    <td class="py-3 px-4 text-right font-mono text-sm">
+                                        <div class="flex flex-col items-end">
+                                            <span class="text-red-600 font-semibold" x-text="item.trade_prices ? formatPrice(item.trade_prices.sell_price) : '-'"></span>
+                                            <span class="text-xs text-green-600" x-text="item.trade_prices ? '+' + item.trade_prices.expected_profit_rate + '%' : ''"></span>
+                                        </div>
+                                    </td>
+                                    <td class="py-3 px-4 text-right">
+                                        <span class="text-sm" x-text="item.rsi ? item.rsi.toFixed(1) : '-'"></span>
+                                    </td>
+                                    <td class="py-3 px-4 text-center">
+                                        <span class="inline-block px-2 py-1 text-xs font-medium rounded"
+                                              :class="getRecommendationClass(item.recommendation)"
+                                              x-text="item.recommendation"></span>
+                                    </td>
+                                    <td class="py-3 px-4 text-center">
+                                        <div class="flex flex-col items-center">
+                                            <span class="text-2xl font-bold text-blue-600" x-text="item.score_100"></span>
+                                            <span class="text-xs text-gray-500">/100</span>
+                                        </div>
+                                    </td>
+                                    <td class="py-3 px-4 text-center">
+                                        <button @click="selectMarket(item.market)"
+                                                class="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded transition">
+                                            분석
+                                        </button>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div x-show="!loading && recommendations.length === 0" class="text-center py-12">
+                    <i class="fas fa-inbox text-4xl text-gray-300 mb-4"></i>
+                    <p class="text-gray-500">분석 결과가 없습니다. 새로고침을 클릭하세요.</p>
+                </div>
+            </div>
+
+            <!-- 전체 종목 -->
+            <div x-show="activeTab === 'all-markets'" class="p-6">
+                <div class="mb-4">
+                    <input type="text" x-model="searchQuery"
+                           placeholder="종목명 또는 코드 검색..."
+                           class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                </div>
+
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead class="bg-gray-50 border-b">
+                            <tr>
+                                <th class="text-left py-3 px-4 text-sm font-semibold text-gray-700">
+                                    <button @click="toggleSort('market')" class="flex items-center hover:text-blue-600 transition">
+                                        종목
+                                        <i class="fas ml-1 text-xs"
+                                           :class="{
+                                               'fa-sort': sortBy !== 'market',
+                                               'fa-sort-up': sortBy === 'market' && sortDirection === 'asc',
+                                               'fa-sort-down': sortBy === 'market' && sortDirection === 'desc'
+                                           }"></i>
+                                    </button>
+                                </th>
+                                <th class="text-right py-3 px-4 text-sm font-semibold text-gray-700">
+                                    <button @click="toggleSort('current_price')" class="flex items-center justify-end w-full hover:text-blue-600 transition">
+                                        현재가
+                                        <i class="fas ml-1 text-xs"
+                                           :class="{
+                                               'fa-sort': sortBy !== 'current_price',
+                                               'fa-sort-up': sortBy === 'current_price' && sortDirection === 'asc',
+                                               'fa-sort-down': sortBy === 'current_price' && sortDirection === 'desc'
+                                           }"></i>
+                                    </button>
+                                </th>
+                                <th class="text-right py-3 px-4 text-sm font-semibold text-gray-700">
+                                    <button @click="toggleSort('change_rate')" class="flex items-center justify-end w-full hover:text-blue-600 transition">
+                                        변동률
+                                        <i class="fas ml-1 text-xs"
+                                           :class="{
+                                               'fa-sort': sortBy !== 'change_rate',
+                                               'fa-sort-up': sortBy === 'change_rate' && sortDirection === 'asc',
+                                               'fa-sort-down': sortBy === 'change_rate' && sortDirection === 'desc'
+                                           }"></i>
+                                    </button>
+                                </th>
+                                <th class="text-right py-3 px-4 text-sm font-semibold text-gray-700">
+                                    <button @click="toggleSort('trade_volume')" class="flex items-center justify-end w-full hover:text-blue-600 transition">
+                                        거래량
+                                        <i class="fas ml-1 text-xs"
+                                           :class="{
+                                               'fa-sort': sortBy !== 'trade_volume',
+                                               'fa-sort-up': sortBy === 'trade_volume' && sortDirection === 'asc',
+                                               'fa-sort-down': sortBy === 'trade_volume' && sortDirection === 'desc'
+                                           }"></i>
+                                    </button>
+                                </th>
+                                <th class="text-center py-3 px-4 text-sm font-semibold text-gray-700">분석</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="market in filteredMarkets" :key="market.market">
+                                <tr class="border-b hover:bg-gray-50 transition">
+                                    <td class="py-3 px-4">
+                                        <div class="font-semibold text-gray-900" x-text="market.market"></div>
+                                        <div class="text-xs text-gray-500" x-text="market.korean_name"></div>
+                                    </td>
+                                    <td class="py-3 px-4 text-right font-mono text-sm" x-text="formatPrice(market.current_price)"></td>
+                                    <td class="py-3 px-4 text-right">
+                                        <span :class="market.change_rate > 0 ? 'text-red-600' : 'text-blue-600'"
+                                              x-text="(market.change_rate > 0 ? '+' : '') + market.change_rate.toFixed(2) + '%'"></span>
+                                    </td>
+                                    <td class="py-3 px-4 text-right text-sm text-gray-600" x-text="formatVolume(market.trade_volume)"></td>
+                                    <td class="py-3 px-4 text-center">
+                                        <button @click="selectMarket(market.market)"
+                                                class="px-3 py-1 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded transition">
+                                            상세
+                                        </button>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 뉴스 분석 -->
+            <div x-show="activeTab === 'news'" class="p-6" x-init="$watch('activeTab', val => val === 'news' && loadNewsSignal())">
+                <div class="flex items-center justify-between mb-6">
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-900">암호화폐 뉴스 감정 분석</h3>
+                        <p class="text-sm text-gray-500 mt-1">실시간 뉴스 기반 시장 심리 분석</p>
+                    </div>
+                    <button @click="loadNewsSignal()"
+                            :disabled="newsLoading"
+                            class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:bg-gray-400">
+                        <i class="fas fa-sync-alt mr-2" :class="{'fa-spin': newsLoading}"></i>
+                        <span x-text="newsLoading ? '분석 중...' : '새로고침'"></span>
+                    </button>
+                </div>
+
+                <!-- 뉴스 없음 -->
+                <div x-show="newsSignal && newsSignal.news_count === 0" class="mb-6">
+                    <div class="card rounded-lg p-8 text-center">
+                        <i class="fas fa-newspaper text-gray-300 text-5xl mb-4"></i>
+                        <h4 class="text-lg font-medium text-gray-700 mb-2">뉴스를 찾을 수 없습니다</h4>
+                        <p class="text-gray-500 mb-4">현재 암호화폐 관련 뉴스가 없거나 API 연결에 문제가 있습니다.</p>
+                        <button @click="loadNewsSignal()"
+                                class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                            <i class="fas fa-redo mr-2"></i>다시 시도
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 뉴스 신호 카드 -->
+                <div x-show="newsSignal && newsSignal.news_count > 0" class="mb-6">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <!-- 신호 -->
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">뉴스 신호</p>
+                            <p class="text-2xl font-bold"
+                               :class="{
+                                   'text-red-600': newsSignal?.signal === 'BUY',
+                                   'text-blue-600': newsSignal?.signal === 'SELL',
+                                   'text-gray-600': newsSignal?.signal === 'HOLD'
+                               }"
+                               x-text="newsSignal?.signal_kr || '-'"></p>
+                        </div>
+                        <!-- 긍정 비율 -->
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">긍정 비율</p>
+                            <p class="text-2xl font-bold"
+                               :style="'color: ' + getSentimentTextColor(newsSignal?.positive_ratio)"
+                               x-text="newsSignal?.positive_ratio ? (newsSignal.positive_ratio * 100).toFixed(1) + '%' : '-'"></p>
+                            <div class="w-full h-2 rounded-full mt-2 bg-gray-200">
+                                <div class="h-2 rounded-full transition-all"
+                                     :style="'width: ' + (newsSignal?.positive_ratio * 100) + '%; background-color: ' + getSentimentColor(newsSignal?.positive_ratio)"></div>
+                            </div>
+                        </div>
+                        <!-- 신뢰도 -->
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">신뢰도</p>
+                            <p class="text-2xl font-bold text-blue-600"
+                               x-text="newsSignal?.confidence ? (newsSignal.confidence * 100).toFixed(1) + '%' : '-'"></p>
+                        </div>
+                        <!-- 분석 뉴스 수 -->
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">분석된 뉴스</p>
+                            <p class="text-2xl font-bold text-gray-900" x-text="newsSignal?.news_count || 0"></p>
+                            <div class="text-xs text-gray-500 mt-1">
+                                <span class="text-green-600" x-text="'+' + (newsSignal?.positive_count || 0)"></span> /
+                                <span class="text-red-600" x-text="'-' + (newsSignal?.negative_count || 0)"></span> /
+                                <span class="text-gray-400" x-text="'=' + (newsSignal?.neutral_count || 0)"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 신호 해석 -->
+                <div x-show="newsSignal && newsSignal.news_count > 0" class="mb-6">
+                    <div class="card rounded-lg p-4"
+                         :class="{
+                             'bg-red-50 border-red-200': newsSignal?.signal === 'BUY',
+                             'bg-blue-50 border-blue-200': newsSignal?.signal === 'SELL',
+                             'bg-yellow-50 border-yellow-200': newsSignal?.signal === 'HOLD'
+                         }">
+                        <div class="flex items-center">
+                            <div class="w-12 h-12 rounded-full flex items-center justify-center mr-4"
+                                 :class="{
+                                     'bg-red-100': newsSignal?.signal === 'BUY',
+                                     'bg-blue-100': newsSignal?.signal === 'SELL',
+                                     'bg-yellow-100': newsSignal?.signal === 'HOLD'
+                                 }">
+                                <i class="fas text-xl"
+                                   :class="{
+                                       'fa-arrow-trend-up text-red-600': newsSignal?.signal === 'BUY',
+                                       'fa-arrow-trend-down text-blue-600': newsSignal?.signal === 'SELL',
+                                       'fa-minus text-yellow-600': newsSignal?.signal === 'HOLD'
+                                   }"></i>
+                            </div>
+                            <div>
+                                <h4 class="font-semibold text-gray-900"
+                                    x-text="newsSignal?.signal === 'BUY' ? '시장 심리 긍정적' : newsSignal?.signal === 'SELL' ? '시장 심리 부정적' : '시장 심리 중립'"></h4>
+                                <p class="text-sm text-gray-600"
+                                   x-text="newsSignal?.signal === 'BUY' ? '긍정적인 뉴스가 많아 매수를 고려해볼 수 있습니다.' : newsSignal?.signal === 'SELL' ? '부정적인 뉴스가 많아 신중한 접근이 필요합니다.' : '뉴스 감정이 혼합되어 있어 관망을 권장합니다.'"></p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 주요 뉴스 -->
+                <div x-show="newsSignal && newsSignal.news_count > 0 && newsSignal.top_news?.length > 0">
+                    <h4 class="font-semibold text-gray-900 mb-4">
+                        <i class="fas fa-fire text-orange-500 mr-2"></i>주요 뉴스
+                    </h4>
+                    <div class="space-y-3">
+                        <template x-for="(news, index) in newsSignal?.top_news || []" :key="index">
+                            <a :href="news.url" target="_blank" rel="noopener noreferrer"
+                               class="card rounded-lg p-4 hover:shadow-md transition block cursor-pointer">
+                                <div class="flex items-start justify-between">
+                                    <div class="flex-1">
+                                        <div class="flex items-center mb-2">
+                                            <span class="inline-block w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center mr-2"
+                                                  :class="{
+                                                      'bg-green-100 text-green-700': news.sentiment === 'positive',
+                                                      'bg-red-100 text-red-700': news.sentiment === 'negative',
+                                                      'bg-gray-100 text-gray-600': news.sentiment === 'neutral'
+                                                  }"
+                                                  x-text="news.sentiment === 'positive' ? '+' : news.sentiment === 'negative' ? '-' : '='"></span>
+                                            <span class="text-xs text-gray-500" x-text="news.source"></span>
+                                        </div>
+                                        <h5 class="font-medium text-gray-900 mb-1 hover:text-blue-600" x-text="news.title"></h5>
+                                        <div class="flex items-center text-xs text-gray-500">
+                                            <span>감정 점수: </span>
+                                            <span class="ml-1 font-medium"
+                                                  :class="{
+                                                      'text-green-600': news.polarity > 0,
+                                                      'text-red-600': news.polarity < 0,
+                                                      'text-gray-600': news.polarity === 0
+                                                  }"
+                                                  x-text="news.polarity?.toFixed(3) || '0'"></span>
+                                        </div>
+                                    </div>
+                                    <i class="fas fa-external-link-alt text-gray-400 ml-3"></i>
+                                </div>
+                            </a>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- 로딩 상태 -->
+                <div x-show="newsLoading" class="text-center py-12">
+                    <div class="inline-block w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                    <p class="mt-4 text-gray-600">뉴스 분석 중...</p>
+                </div>
+
+                <!-- 데이터 없음 -->
+                <div x-show="!newsLoading && !newsSignal" class="text-center py-12">
+                    <i class="fas fa-newspaper text-4xl text-gray-300 mb-4"></i>
+                    <p class="text-gray-500">뉴스 데이터를 불러오려면 새로고침을 클릭하세요.</p>
+                </div>
+            </div>
+
+            <!-- 자동매매 -->
+            <div x-show="activeTab === 'trading'" class="p-6" x-init="$watch('activeTab', val => { if(val === 'trading') { checkApiConnection(); loadAutoTradingStatus(); loadCoinPreview(); } })">
+                <div class="flex items-center justify-between mb-6">
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-900">AI 자동매매 시스템</h3>
+                        <p class="text-sm text-gray-500 mt-1">학습된 AI 모델 기반 자동 트레이딩</p>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <div class="flex items-center space-x-2 px-3 py-1.5 rounded-full text-sm"
+                             :class="apiConnected ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'">
+                            <div class="w-2 h-2 rounded-full" :class="apiConnected ? 'bg-green-500' : 'bg-red-500'"></div>
+                            <span x-text="apiConnected ? 'API 연결됨' : 'API 미연결'"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 모드 토글 -->
+                <div x-show="apiConnected" class="mb-6">
+                    <div class="flex bg-gray-100 rounded-lg p-1 w-fit">
+                        <button @click="tradingMode = 'auto'; loadCoinPreview()"
+                                :class="tradingMode === 'auto' ? 'bg-blue-600 text-white shadow' : 'text-gray-600 hover:text-gray-800'"
+                                class="px-4 py-2 rounded-lg font-medium transition">
+                            <i class="fas fa-magic mr-2"></i>원클릭 자동매매
+                        </button>
+                        <button @click="tradingMode = 'manual'"
+                                :class="tradingMode === 'manual' ? 'bg-blue-600 text-white shadow' : 'text-gray-600 hover:text-gray-800'"
+                                class="px-4 py-2 rounded-lg font-medium transition">
+                            <i class="fas fa-hand-pointer mr-2"></i>수동 선택
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ========== 원클릭 자동매매 패널 ========== -->
+                <div x-show="apiConnected && tradingMode === 'auto'" class="space-y-6">
+                    <!-- 원클릭 시작 카드 -->
+                    <div class="card rounded-lg p-6 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200">
+                        <div class="flex items-center justify-between flex-wrap gap-4">
+                            <div>
+                                <h3 class="text-xl font-bold text-gray-900">
+                                    <i class="fas fa-robot text-blue-600 mr-2"></i>
+                                    AI 자동 코인 선택 매매
+                                </h3>
+                                <p class="text-gray-600 mt-1">
+                                    AI가 자동으로 상위 코인을 선택하고 분산 투자합니다
+                                </p>
+                            </div>
+                            <div class="flex items-center space-x-3">
+                                <!-- 일반 시작 버튼 -->
+                                <button x-show="!autoTradingStatus?.is_running && !autoTradingLoading"
+                                        @click="startAutoTrading()"
+                                        class="px-8 py-4 bg-blue-600 text-white rounded-xl hover:bg-blue-700
+                                               transition font-bold text-lg shadow-lg">
+                                    <i class="fas fa-play mr-2"></i>
+                                    <span>원클릭 시작</span>
+                                </button>
+                                <!-- 로딩 중 버튼 (프로그레스 바 포함) -->
+                                <div x-show="!autoTradingStatus?.is_running && autoTradingLoading"
+                                     class="relative px-8 py-4 bg-blue-800 text-white rounded-xl font-bold text-lg shadow-lg overflow-hidden min-w-[180px]">
+                                    <div class="absolute inset-0 bg-blue-600 animate-loading-bar"></div>
+                                    <div class="relative flex items-center justify-center">
+                                        <i class="fas fa-robot fa-bounce mr-2"></i>
+                                        <span>AI 분석중...</span>
+                                    </div>
+                                </div>
+                                <button x-show="autoTradingStatus?.is_running"
+                                        @click="stopAutoTrading()"
+                                        :disabled="autoTradingLoading"
+                                        class="px-8 py-4 bg-red-600 text-white rounded-xl hover:bg-red-700
+                                               transition disabled:bg-gray-400 font-bold text-lg shadow-lg">
+                                    <i class="fas fa-stop mr-2"></i>
+                                    <span x-text="autoTradingLoading ? '중지 중...' : '자동매매 중지'"></span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 자동매매 설정 -->
+                    <div x-show="!autoTradingStatus?.is_running" class="space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <div class="card rounded-lg p-4">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">총 투자금액 (KRW)</label>
+                                <input type="number" x-model="autoTradingSettings.total_investment"
+                                       min="50000" step="50000"
+                                       class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                <p class="text-xs text-gray-500 mt-1">최소 50,000원</p>
+                            </div>
+                            <div class="card rounded-lg p-4">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">투자 코인 수</label>
+                                <select x-model="autoTradingSettings.coin_count"
+                                        @change="onCoinCountChange()"
+                                        class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                    <option value="1">1개</option>
+                                    <option value="2">2개</option>
+                                    <option value="3">3개</option>
+                                    <option value="4">4개</option>
+                                    <option value="5">5개</option>
+                                </select>
+                                <p class="text-xs text-gray-500 mt-1">분산 투자할 코인 수</p>
+                            </div>
+                            <div class="card rounded-lg p-4">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">분석 범위</label>
+                                <select x-model="autoTradingSettings.analysis_mode"
+                                        class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                    <option value="volume_top50">Top 50 (빠름)</option>
+                                    <option value="volume_top100">Top 100</option>
+                                </select>
+                                <p class="text-xs text-gray-500 mt-1">거래량 상위 기준</p>
+                            </div>
+                        </div>
+
+                        <!-- 코인 카테고리 설정 -->
+                        <div class="card rounded-lg p-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-3">
+                                <i class="fas fa-filter text-blue-500 mr-1"></i>투자 코인 카테고리
+                            </label>
+                            <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+                                <label class="flex items-center p-3 border-2 rounded-lg cursor-pointer transition"
+                                       :class="autoTradingSettings.coin_category === 'safe' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'"
+                                       @click="autoTradingSettings.coin_category = 'safe'; loadCoinPreview('safe')">
+                                    <input type="radio" name="coin_category" value="safe"
+                                           x-model="autoTradingSettings.coin_category" class="hidden">
+                                    <div class="flex items-center">
+                                        <div class="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center mr-3">
+                                            <i class="fas fa-shield-alt text-green-600"></i>
+                                        </div>
+                                        <div>
+                                            <p class="font-medium text-gray-900">안전 투자</p>
+                                            <p class="text-xs text-gray-500">BTC, ETH 등 상위 6개</p>
+                                        </div>
+                                    </div>
+                                </label>
+                                <label class="flex items-center p-3 border-2 rounded-lg cursor-pointer transition"
+                                       :class="autoTradingSettings.coin_category === 'normal' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'"
+                                       @click="autoTradingSettings.coin_category = 'normal'; loadCoinPreview('normal')">
+                                    <input type="radio" name="coin_category" value="normal"
+                                           x-model="autoTradingSettings.coin_category" class="hidden">
+                                    <div class="flex items-center">
+                                        <div class="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center mr-3">
+                                            <i class="fas fa-balance-scale text-blue-600"></i>
+                                        </div>
+                                        <div>
+                                            <p class="font-medium text-gray-900">일반 투자</p>
+                                            <p class="text-xs text-gray-500">밈코인 제외</p>
+                                        </div>
+                                    </div>
+                                </label>
+                                <label class="flex items-center p-3 border-2 rounded-lg cursor-pointer transition"
+                                       :class="autoTradingSettings.coin_category === 'meme' ? 'border-pink-500 bg-pink-50' : 'border-gray-200 hover:border-gray-300'"
+                                       @click="autoTradingSettings.coin_category = 'meme'; loadCoinPreview('meme')">
+                                    <input type="radio" name="coin_category" value="meme"
+                                           x-model="autoTradingSettings.coin_category" class="hidden">
+                                    <div class="flex items-center">
+                                        <div class="w-10 h-10 rounded-full bg-pink-100 flex items-center justify-center mr-3">
+                                            <span class="text-2xl">🐕</span>
+                                        </div>
+                                        <div>
+                                            <p class="font-medium text-gray-900">밈코인 전용</p>
+                                            <p class="text-xs text-gray-500">DOGE, SHIB 등</p>
+                                        </div>
+                                    </div>
+                                </label>
+                                <label class="flex items-center p-3 border-2 rounded-lg cursor-pointer transition"
+                                       :class="autoTradingSettings.coin_category === 'all' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'"
+                                       @click="autoTradingSettings.coin_category = 'all'; loadCoinPreview('all')">
+                                    <input type="radio" name="coin_category" value="all"
+                                           x-model="autoTradingSettings.coin_category" class="hidden">
+                                    <div class="flex items-center">
+                                        <div class="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center mr-3">
+                                            <i class="fas fa-fire text-orange-600"></i>
+                                        </div>
+                                        <div>
+                                            <p class="font-medium text-gray-900">전체</p>
+                                            <p class="text-xs text-gray-500">모든 코인 포함</p>
+                                        </div>
+                                    </div>
+                                </label>
+                            </div>
+                            <p x-show="autoTradingSettings.coin_category === 'meme' || autoTradingSettings.coin_category === 'all'" class="text-xs text-orange-600 mt-2">
+                                <i class="fas fa-exclamation-triangle mr-1"></i>밈코인은 변동폭이 커서 투자 위험이 높습니다.
+                            </p>
+                        </div>
+
+                        <!-- 투자금 배분 방식 설정 -->
+                        <div class="card rounded-lg p-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-3">
+                                <i class="fas fa-chart-pie text-indigo-500 mr-1"></i>투자금 배분 방식
+                            </label>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <label class="flex items-center p-3 border-2 rounded-lg cursor-pointer transition"
+                                       :class="autoTradingSettings.allocation_mode === 'weighted' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'"
+                                       @click="autoTradingSettings.allocation_mode = 'weighted'; loadCoinPreview()">
+                                    <input type="radio" name="allocation_mode" value="weighted"
+                                           x-model="autoTradingSettings.allocation_mode" class="hidden">
+                                    <div class="flex items-center">
+                                        <div class="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center mr-3">
+                                            <i class="fas fa-star text-indigo-600"></i>
+                                        </div>
+                                        <div>
+                                            <p class="font-medium text-gray-900">점수 기반 배분</p>
+                                            <p class="text-xs text-gray-500">유망한 코인에 더 많이 투자</p>
+                                        </div>
+                                    </div>
+                                </label>
+                                <label class="flex items-center p-3 border-2 rounded-lg cursor-pointer transition"
+                                       :class="autoTradingSettings.allocation_mode === 'equal' ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'"
+                                       @click="autoTradingSettings.allocation_mode = 'equal'; loadCoinPreview()">
+                                    <input type="radio" name="allocation_mode" value="equal"
+                                           x-model="autoTradingSettings.allocation_mode" class="hidden">
+                                    <div class="flex items-center">
+                                        <div class="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center mr-3">
+                                            <i class="fas fa-equals text-gray-600"></i>
+                                        </div>
+                                        <div>
+                                            <p class="font-medium text-gray-900">균등 배분</p>
+                                            <p class="text-xs text-gray-500">모든 코인에 동일하게 투자</p>
+                                        </div>
+                                    </div>
+                                </label>
+                            </div>
+                            <p x-show="autoTradingSettings.allocation_mode === 'weighted'" class="text-xs text-indigo-600 mt-2">
+                                <i class="fas fa-lightbulb mr-1"></i>AI 점수가 높은 코인에 더 많은 투자금이 배분됩니다.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- 실행 중 상태 표시 -->
+                    <div x-show="autoTradingStatus?.is_running" class="card rounded-lg p-4 bg-green-50 border border-green-200">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center">
+                                <div class="w-3 h-3 bg-green-500 rounded-full animate-pulse mr-3"></div>
+                                <span class="font-medium text-green-800">자동매매 실행 중</span>
+                            </div>
+                            <div class="text-sm text-green-700">
+                                시작: <span x-text="autoTradingStatus?.start_time ? new Date(autoTradingStatus.start_time).toLocaleString('ko-KR') : '-'"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 선택된 코인 표시 -->
+                    <div class="card rounded-lg p-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <h4 class="font-semibold text-gray-900">
+                                <i class="fas fa-coins text-yellow-500 mr-2"></i>
+                                선택된 코인 (<span x-text="autoTradingStatus?.is_running ? (autoTradingStatus?.selected_coins?.length || 0) : (previewCoins?.length || 0)"></span>개)
+                            </h4>
+                            <span x-show="previewLoading" class="text-sm text-blue-600">
+                                <i class="fas fa-spinner fa-spin mr-1"></i>AI 분석중...
+                            </span>
+                        </div>
+
+                        <!-- 로딩 중 -->
+                        <div x-show="previewLoading && !autoTradingStatus?.is_running" class="flex items-center justify-center py-8">
+                            <div class="text-center">
+                                <i class="fas fa-robot text-4xl text-blue-500 mb-3 animate-bounce"></i>
+                                <p class="text-gray-600">AI가 최적의 코인을 분석하고 있습니다...</p>
+                            </div>
+                        </div>
+
+                        <!-- 미리보기 코인 (실행 전) -->
+                        <div x-show="!previewLoading && !autoTradingStatus?.is_running && previewCoins?.length > 0"
+                             class="grid grid-cols-1 md:grid-cols-5 gap-4">
+                            <template x-for="coin in previewCoins" :key="coin.market">
+                                <div class="p-4 rounded-lg border-2 bg-gray-50 border-gray-200 transition cursor-pointer hover:shadow-lg hover:scale-105 hover:border-blue-300"
+                                     @click="openCoinChart(coin)">
+                                    <div class="flex justify-between items-start">
+                                        <div>
+                                            <div class="font-bold text-lg" x-text="coin.market.split('-')[1]"></div>
+                                            <div class="text-xs text-gray-500" x-text="coin.name"></div>
+                                        </div>
+                                        <!-- 배분 비율 뱃지 -->
+                                        <div class="text-right">
+                                            <div class="px-2 py-1 rounded-full text-xs font-bold"
+                                                 :class="coin.allocation_percent >= 40 ? 'bg-indigo-500 text-white' : coin.allocation_percent >= 30 ? 'bg-indigo-400 text-white' : 'bg-indigo-100 text-indigo-700'"
+                                                 x-text="(coin.allocation_percent || 0).toFixed(0) + '%'"></div>
+                                        </div>
+                                    </div>
+                                    <div class="mt-2 text-sm font-semibold text-gray-800" x-text="'₩' + formatPrice(coin.current_price)"></div>
+                                    <div class="flex justify-between items-center">
+                                        <div class="text-sm font-medium"
+                                             :class="coin.change_rate >= 0 ? 'text-red-500' : 'text-blue-500'"
+                                             x-text="(coin.change_rate >= 0 ? '+' : '') + coin.change_rate?.toFixed(2) + '%'"></div>
+                                        <div class="text-xs text-gray-500" x-text="'₩' + formatPrice(coin.allocated_amount || 0)"></div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- 실행 중 코인 -->
+                        <div x-show="autoTradingStatus?.is_running && autoTradingStatus?.selected_coins?.length > 0"
+                             class="grid grid-cols-1 md:grid-cols-5 gap-4">
+                            <template x-for="coin in autoTradingStatus?.selected_coins || []" :key="coin.market">
+                                <div class="p-4 rounded-lg border-2 transition relative"
+                                     :class="autoTradingStatus?.positions?.[coin.market]?.status === 'long'
+                                             ? (autoTradingStatus?.positions?.[coin.market]?.unrealized_pnl >= 0
+                                                ? 'bg-red-50 border-red-300'
+                                                : 'bg-blue-50 border-blue-300')
+                                             : autoTradingStatus?.positions?.[coin.market]?.pending_order
+                                               ? 'bg-yellow-50 border-yellow-300'
+                                               : 'bg-gray-50 border-gray-200'">
+                                    <!-- 제거 버튼 -->
+                                    <button @click.stop="removeCoinFromPortfolio(coin.market)"
+                                            class="absolute top-1 right-1 w-6 h-6 flex items-center justify-center rounded-full bg-gray-200 hover:bg-red-500 hover:text-white text-gray-500 text-xs transition z-10"
+                                            title="코인 제거">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                    <div class="flex justify-between items-start cursor-pointer" @click="openCoinChart(coin)">
+                                        <div>
+                                            <div class="font-bold text-lg" x-text="coin.market"></div>
+                                            <div class="text-sm text-gray-600" x-text="coin.name"></div>
+                                        </div>
+                                        <!-- 배분 비율 뱃지 -->
+                                        <div class="text-right mr-4">
+                                            <div class="px-2 py-1 rounded-full text-xs font-bold"
+                                                 :class="coin.allocation_percent >= 40 ? 'bg-indigo-500 text-white' : coin.allocation_percent >= 30 ? 'bg-indigo-400 text-white' : 'bg-indigo-100 text-indigo-700'"
+                                                 x-text="(coin.allocation_percent || 0).toFixed(0) + '%'"></div>
+                                            <div class="text-xs text-gray-500 mt-1" x-text="'₩' + formatPrice(coin.allocated_amount || 0)"></div>
+                                        </div>
+                                    </div>
+                                    <div class="mt-2 flex items-baseline">
+                                        <span class="text-2xl font-bold text-blue-600" x-text="coin.score"></span>
+                                        <span class="text-xs text-gray-500 ml-1">/100</span>
+                                    </div>
+                                    <!-- 미니 차트 -->
+                                    <div class="mt-2 h-10 bg-white rounded overflow-hidden" x-show="miniCharts[coin.market]?.length > 1">
+                                        <svg width="100%" height="100%" viewBox="0 0 120 40" preserveAspectRatio="none">
+                                            <path :d="getSparklinePath(coin.market)"
+                                                  fill="none"
+                                                  :stroke="getSparklineColor(coin.market)"
+                                                  stroke-width="2"
+                                                  stroke-linecap="round"
+                                                  stroke-linejoin="round"/>
+                                        </svg>
+                                    </div>
+                                    <div class="mt-2 h-10 bg-gray-100 rounded flex items-center justify-center" x-show="!miniCharts[coin.market] || miniCharts[coin.market]?.length <= 1">
+                                        <span class="text-xs text-gray-400">차트 로딩...</span>
+                                    </div>
+                                    <!-- 포지션 정보 (보유 중) -->
+                                    <div x-show="autoTradingStatus?.positions?.[coin.market]?.status === 'long'"
+                                         class="mt-2 pt-2 border-t border-gray-200 space-y-1">
+                                        <div class="flex justify-between text-xs">
+                                            <span class="text-gray-500">매수가</span>
+                                            <span class="font-medium" x-text="'₩' + formatPrice(autoTradingStatus?.positions?.[coin.market]?.entry_price || 0)"></span>
+                                        </div>
+                                        <div class="flex justify-between text-xs">
+                                            <span class="text-gray-500">현재가</span>
+                                            <span class="font-medium" x-text="'₩' + formatPrice(autoTradingStatus?.positions?.[coin.market]?.current_price || 0)"></span>
+                                        </div>
+                                        <div class="flex justify-between text-xs">
+                                            <span class="text-gray-500">수량</span>
+                                            <span class="font-medium" x-text="(autoTradingStatus?.positions?.[coin.market]?.volume || 0).toFixed(6)"></span>
+                                        </div>
+                                        <div class="flex justify-between text-xs">
+                                            <span class="text-gray-500">수익률</span>
+                                            <span class="font-bold"
+                                                  :class="((autoTradingStatus?.positions?.[coin.market]?.current_price - autoTradingStatus?.positions?.[coin.market]?.entry_price) / autoTradingStatus?.positions?.[coin.market]?.entry_price * 100) >= 0 ? 'text-red-600' : 'text-blue-600'"
+                                                  x-text="(((autoTradingStatus?.positions?.[coin.market]?.current_price - autoTradingStatus?.positions?.[coin.market]?.entry_price) / autoTradingStatus?.positions?.[coin.market]?.entry_price * 100) >= 0 ? '+' : '') + ((autoTradingStatus?.positions?.[coin.market]?.current_price - autoTradingStatus?.positions?.[coin.market]?.entry_price) / autoTradingStatus?.positions?.[coin.market]?.entry_price * 100).toFixed(2) + '%'"></span>
+                                        </div>
+                                        <div class="flex justify-between text-xs pt-1 border-t border-gray-100">
+                                            <span class="text-gray-500">미실현 손익</span>
+                                            <span class="font-bold"
+                                                  :class="autoTradingStatus?.positions?.[coin.market]?.unrealized_pnl >= 0 ? 'text-red-600' : 'text-blue-600'"
+                                                  x-text="(autoTradingStatus?.positions?.[coin.market]?.unrealized_pnl >= 0 ? '+' : '') + '₩' + formatPrice(Math.abs(autoTradingStatus?.positions?.[coin.market]?.unrealized_pnl || 0))"></span>
+                                        </div>
+                                        <!-- AI 목표/손절가 -->
+                                        <div class="pt-1 border-t border-gray-100 space-y-1">
+                                            <div class="flex justify-between text-xs">
+                                                <span class="text-green-600">
+                                                    <i class="fas fa-bullseye text-xs"></i> AI 목표가
+                                                </span>
+                                                <span class="font-bold text-green-600"
+                                                      x-text="'₩' + formatPrice(autoTradingStatus?.positions?.[coin.market]?.trade_prices?.sell_price || 0)"></span>
+                                            </div>
+                                            <div class="flex justify-between text-xs">
+                                                <span class="text-red-600">
+                                                    <i class="fas fa-exclamation-triangle text-xs"></i> AI 손절가
+                                                </span>
+                                                <span class="font-bold text-red-600"
+                                                      x-text="'₩' + formatPrice(autoTradingStatus?.positions?.[coin.market]?.trade_prices?.stop_loss || 0)"></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <!-- 주문 완료 (지정가 주문 걸린 상태) -->
+                                    <div x-show="autoTradingStatus?.positions?.[coin.market]?.status !== 'long' && autoTradingStatus?.positions?.[coin.market]?.pending_order"
+                                         class="mt-2 pt-2 border-t border-yellow-200 space-y-1">
+                                        <div class="flex items-center justify-between">
+                                            <span class="text-xs font-bold text-yellow-700">
+                                                <i class="fas fa-check-circle mr-1"></i>주문 완료
+                                            </span>
+                                            <button @click.stop="cancelPendingOrder(coin.market)"
+                                                    class="px-2 py-0.5 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded transition">
+                                                <i class="fas fa-times mr-1"></i>취소
+                                            </button>
+                                        </div>
+                                        <!-- 주문 정보 -->
+                                        <div class="bg-gradient-to-r from-yellow-50 to-orange-50 rounded p-2 space-y-1">
+                                            <div class="flex justify-between text-xs">
+                                                <span class="text-yellow-800 font-medium">
+                                                    <i class="fas fa-tag text-xs"></i> 주문 가격
+                                                </span>
+                                                <span class="font-bold text-yellow-900"
+                                                      x-text="'₩' + formatPrice(autoTradingStatus?.positions?.[coin.market]?.pending_order?.price || 0)"></span>
+                                            </div>
+                                            <div class="flex justify-between text-xs">
+                                                <span class="text-gray-600">현재가</span>
+                                                <span class="font-medium"
+                                                      x-text="'₩' + formatPrice(autoTradingStatus?.positions?.[coin.market]?.current_price || 0)"></span>
+                                            </div>
+                                            <div class="flex justify-between text-xs">
+                                                <span class="text-green-700">
+                                                    <i class="fas fa-bullseye text-xs"></i> 목표가
+                                                </span>
+                                                <span class="font-medium text-green-700"
+                                                      x-text="'₩' + formatPrice(autoTradingStatus?.positions?.[coin.market]?.trade_prices?.sell_price || 0)"></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <!-- 대기 중 (주문 아직 안 걸림) -->
+                                    <div x-show="autoTradingStatus?.positions?.[coin.market]?.status !== 'long' && !autoTradingStatus?.positions?.[coin.market]?.pending_order"
+                                         class="mt-2 pt-2 border-t border-gray-200 space-y-1">
+                                        <div class="flex items-center justify-between">
+                                            <span class="text-xs font-medium text-blue-600">
+                                                <i class="fas fa-clock mr-1"></i>매수 대기 중
+                                            </span>
+                                            <span class="text-xs text-gray-500">₩<span x-text="formatPrice(autoTradingStatus?.positions?.[coin.market]?.allocated_amount || 0)"></span></span>
+                                        </div>
+                                        <!-- AI 예상 가격 -->
+                                        <div class="bg-gradient-to-r from-blue-50 to-purple-50 rounded p-2 space-y-1">
+                                            <div class="flex justify-between text-xs">
+                                                <span class="text-blue-700 font-medium">
+                                                    <i class="fas fa-arrow-down text-xs"></i> AI 매수가
+                                                </span>
+                                                <span class="font-bold text-blue-800"
+                                                      x-text="'₩' + formatPrice(autoTradingStatus?.positions?.[coin.market]?.trade_prices?.buy_price || 0)"></span>
+                                            </div>
+                                            <div class="flex justify-between text-xs">
+                                                <span class="text-green-700">
+                                                    <i class="fas fa-bullseye text-xs"></i> 목표가
+                                                </span>
+                                                <span class="font-medium text-green-700"
+                                                      x-text="'₩' + formatPrice(autoTradingStatus?.positions?.[coin.market]?.trade_prices?.sell_price || 0)"></span>
+                                            </div>
+                                            <div class="flex justify-between text-xs">
+                                                <span class="text-red-700">
+                                                    <i class="fas fa-exclamation-triangle text-xs"></i> 손절가
+                                                </span>
+                                                <span class="font-medium text-red-700"
+                                                      x-text="'₩' + formatPrice(autoTradingStatus?.positions?.[coin.market]?.trade_prices?.stop_loss || 0)"></span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- 코인 없음 -->
+                        <div x-show="!previewLoading && !autoTradingStatus?.is_running && (!previewCoins || previewCoins.length === 0)"
+                             class="text-center py-8 text-gray-500">
+                            <i class="fas fa-search text-3xl mb-2"></i>
+                            <p>선택된 코인이 없습니다</p>
+                        </div>
+                    </div>
+
+                    <!-- 포트폴리오 요약 -->
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div class="card rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-1">
+                                <p class="text-sm text-gray-500" x-text="autoTradingStatus?.is_running ? '시작 잔고' : '현재 잔고'"></p>
+                                <button @click="fetchAutoTradingStatus()"
+                                        class="w-7 h-7 flex items-center justify-center rounded-full border transition-all duration-200"
+                                        :class="balanceRefreshing ? 'bg-blue-500 border-blue-500 text-white' : (balanceRefreshDone ? 'bg-green-500 border-green-500 text-white' : 'bg-gray-100 border-gray-300 text-gray-600 hover:bg-blue-100 hover:border-blue-400 hover:text-blue-600')"
+                                        :disabled="balanceRefreshing"
+                                        title="잔고 새로고침">
+                                    <i class="text-xs"
+                                       :class="balanceRefreshing ? 'fas fa-sync-alt animate-spin' : (balanceRefreshDone ? 'fas fa-check' : 'fas fa-sync-alt')"></i>
+                                </button>
+                            </div>
+                            <p class="text-xl font-bold"
+                               :class="(autoTradingStatus?.start_balance > 0 || autoTradingStatus?.available_balance > 0) ? 'text-gray-900' : 'text-orange-500'"
+                               x-text="autoTradingStatus?.start_balance > 0 ? '₩ ' + formatPrice(autoTradingStatus.start_balance) : (autoTradingStatus?.available_balance > 0 ? '₩ ' + formatPrice(autoTradingStatus.available_balance) : '잔고없음')"></p>
+                        </div>
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">현재 평가액</p>
+                            <p class="text-xl font-bold"
+                               :class="(autoTradingStatus?.current_balance > 0 || autoTradingStatus?.available_balance > 0) ? 'text-gray-900' : 'text-orange-500'"
+                               x-text="autoTradingStatus?.current_balance > 0 ? '₩ ' + formatPrice(autoTradingStatus.current_balance) : (autoTradingStatus?.available_balance > 0 ? '₩ ' + formatPrice(autoTradingStatus.available_balance) : '잔고없음')"></p>
+                        </div>
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">총 손익</p>
+                            <p class="text-xl font-bold"
+                               :class="(autoTradingStatus?.profit || 0) >= 0 ? 'text-red-600' : 'text-blue-600'"
+                               x-text="autoTradingStatus?.start_balance > 0 ? ((autoTradingStatus.profit >= 0 ? '+' : '') + '₩ ' + formatPrice(Math.abs(autoTradingStatus.profit || 0))) : '-'"></p>
+                        </div>
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">수익률</p>
+                            <p class="text-xl font-bold"
+                               :class="(autoTradingStatus?.profit_rate || 0) >= 0 ? 'text-red-600' : 'text-blue-600'"
+                               x-text="autoTradingStatus?.start_balance > 0 ? ((autoTradingStatus.profit_rate >= 0 ? '+' : '') + (autoTradingStatus.profit_rate || 0).toFixed(2) + '%') : '-'"></p>
+                        </div>
+                    </div>
+
+                    <!-- 잔고 없음 안내 -->
+                    <div x-show="autoTradingStatus?.is_running && autoTradingStatus?.start_balance <= 0 && autoTradingStatus?.available_balance <= 0"
+                         class="bg-orange-50 border border-orange-300 rounded-lg p-4">
+                        <div class="flex items-center">
+                            <i class="fas fa-exclamation-triangle text-orange-500 mr-3 text-xl"></i>
+                            <div>
+                                <h4 class="font-medium text-orange-800">계좌에 잔고가 없습니다</h4>
+                                <p class="text-sm text-orange-700 mt-1">
+                                    실제 자동매매를 진행하려면 업비트 계좌에 KRW를 입금해주세요.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 목표가/손절가 설정 -->
+                    <div class="bg-gradient-to-r from-green-50 to-red-50 border border-gray-200 rounded-xl p-5 mb-4 shadow-sm">
+                        <div class="flex items-center justify-between mb-4">
+                            <h4 class="font-bold text-gray-800 flex items-center">
+                                <i class="fas fa-crosshairs text-purple-500 mr-2"></i>
+                                자동 매매 조건 설정
+                            </h4>
+                            <div class="flex items-center space-x-3">
+                                <!-- 현재 설정값 미리보기 (접혀있을 때) -->
+                                <div x-show="!showConditionSettings && !autoTradingStatus?.is_running"
+                                     class="hidden sm:flex items-center space-x-2 text-sm">
+                                    <span class="px-2 py-1 bg-green-100 text-green-700 rounded-full font-medium">
+                                        +<span x-text="autoTradingSettings.target_profit_percent"></span>%
+                                    </span>
+                                    <span class="px-2 py-1 bg-red-100 text-red-700 rounded-full font-medium">
+                                        -<span x-text="autoTradingSettings.stop_loss_percent"></span>%
+                                    </span>
+                                </div>
+                                <!-- 설정 버튼 -->
+                                <button x-show="!autoTradingStatus?.is_running"
+                                        @click="showConditionSettings = !showConditionSettings"
+                                        :class="showConditionSettings ? 'bg-purple-500 text-white' : 'bg-purple-100 text-purple-700 hover:bg-purple-200'"
+                                        class="px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center space-x-2">
+                                    <i class="fas" :class="showConditionSettings ? 'fa-chevron-up' : 'fa-cog'"></i>
+                                    <span x-text="showConditionSettings ? '접기' : '설정'"></span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 설정 입력 (실행 중 아닐 때 + 설정 버튼 클릭 시) -->
+                        <div x-show="!autoTradingStatus?.is_running && showConditionSettings"
+                             x-transition:enter="transition ease-out duration-200"
+                             x-transition:enter-start="opacity-0 transform -translate-y-2"
+                             x-transition:enter-end="opacity-100 transform translate-y-0"
+                             x-transition:leave="transition ease-in duration-150"
+                             x-transition:leave-start="opacity-100 transform translate-y-0"
+                             x-transition:leave-end="opacity-0 transform -translate-y-2"
+                             class="space-y-4">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <!-- 목표가 설정 -->
+                                <div class="bg-white rounded-xl p-4 border-2 border-green-200 shadow-sm hover:shadow-md transition-shadow">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <label class="font-bold text-green-700 flex items-center">
+                                            <i class="fas fa-arrow-trend-up mr-2"></i>목표가 (익절)
+                                        </label>
+                                        <span class="text-3xl font-black text-green-600">+<span x-text="autoTradingSettings.target_profit_percent"></span>%</span>
+                                    </div>
+                                    <input type="range"
+                                           x-model.number="autoTradingSettings.target_profit_percent"
+                                           min="1" max="50" step="1"
+                                           class="w-full h-3 bg-green-200 rounded-lg appearance-none cursor-pointer accent-green-500">
+                                    <div class="flex justify-between text-xs text-gray-400 mt-1">
+                                        <span>1%</span>
+                                        <span>25%</span>
+                                        <span>50%</span>
+                                    </div>
+                                    <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+                                        <button @click="autoTradingSettings.target_profit_percent = 5"
+                                                :class="autoTradingSettings.target_profit_percent === 5 ? 'bg-green-500 text-white' : 'bg-green-100 text-green-700 hover:bg-green-200'"
+                                                class="px-3 py-2 rounded-full text-sm font-medium transition-all">5%</button>
+                                        <button @click="autoTradingSettings.target_profit_percent = 10"
+                                                :class="autoTradingSettings.target_profit_percent === 10 ? 'bg-green-500 text-white' : 'bg-green-100 text-green-700 hover:bg-green-200'"
+                                                class="px-3 py-2 rounded-full text-sm font-medium transition-all">10%</button>
+                                        <button @click="autoTradingSettings.target_profit_percent = 20"
+                                                :class="autoTradingSettings.target_profit_percent === 20 ? 'bg-green-500 text-white' : 'bg-green-100 text-green-700 hover:bg-green-200'"
+                                                class="px-3 py-2 rounded-full text-sm font-medium transition-all">20%</button>
+                                        <button @click="autoTradingSettings.target_profit_percent = 30"
+                                                :class="autoTradingSettings.target_profit_percent === 30 ? 'bg-green-500 text-white' : 'bg-green-100 text-green-700 hover:bg-green-200'"
+                                                class="px-3 py-2 rounded-full text-sm font-medium transition-all">30%</button>
+                                    </div>
+                                </div>
+
+                                <!-- 손절가 설정 -->
+                                <div class="bg-white rounded-xl p-4 border-2 border-red-200 shadow-sm hover:shadow-md transition-shadow">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <label class="font-bold text-red-700 flex items-center">
+                                            <i class="fas fa-arrow-trend-down mr-2"></i>손절가 (손절)
+                                        </label>
+                                        <span class="text-3xl font-black text-red-600">-<span x-text="autoTradingSettings.stop_loss_percent"></span>%</span>
+                                    </div>
+                                    <input type="range"
+                                           x-model.number="autoTradingSettings.stop_loss_percent"
+                                           min="1" max="50" step="1"
+                                           class="w-full h-3 bg-red-200 rounded-lg appearance-none cursor-pointer accent-red-500">
+                                    <div class="flex justify-between text-xs text-gray-400 mt-1">
+                                        <span>1%</span>
+                                        <span>25%</span>
+                                        <span>50%</span>
+                                    </div>
+                                    <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+                                        <button @click="autoTradingSettings.stop_loss_percent = 3"
+                                                :class="autoTradingSettings.stop_loss_percent === 3 ? 'bg-red-500 text-white' : 'bg-red-100 text-red-700 hover:bg-red-200'"
+                                                class="px-3 py-2 rounded-full text-sm font-medium transition-all">3%</button>
+                                        <button @click="autoTradingSettings.stop_loss_percent = 5"
+                                                :class="autoTradingSettings.stop_loss_percent === 5 ? 'bg-red-500 text-white' : 'bg-red-100 text-red-700 hover:bg-red-200'"
+                                                class="px-3 py-2 rounded-full text-sm font-medium transition-all">5%</button>
+                                        <button @click="autoTradingSettings.stop_loss_percent = 10"
+                                                :class="autoTradingSettings.stop_loss_percent === 10 ? 'bg-red-500 text-white' : 'bg-red-100 text-red-700 hover:bg-red-200'"
+                                                class="px-3 py-2 rounded-full text-sm font-medium transition-all">10%</button>
+                                        <button @click="autoTradingSettings.stop_loss_percent = 20"
+                                                :class="autoTradingSettings.stop_loss_percent === 20 ? 'bg-red-500 text-white' : 'bg-red-100 text-red-700 hover:bg-red-200'"
+                                                class="px-3 py-2 rounded-full text-sm font-medium transition-all">20%</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 설정 확인 메시지 -->
+                            <div class="bg-purple-50 rounded-lg p-3 flex items-center justify-between">
+                                <div class="flex items-center text-purple-700">
+                                    <i class="fas fa-check-circle mr-2"></i>
+                                    <span class="text-sm">
+                                        <strong>+<span x-text="autoTradingSettings.target_profit_percent"></span>%</strong> 이익 또는
+                                        <strong>-<span x-text="autoTradingSettings.stop_loss_percent"></span>%</strong> 손실 시 자동 매도
+                                    </span>
+                                </div>
+                                <span class="text-xs text-purple-500">AI 신호보다 우선</span>
+                            </div>
+                        </div>
+
+                        <!-- 접혀있을 때 간단한 요약 (실행 중 아닐 때) -->
+                        <div x-show="!autoTradingStatus?.is_running && !showConditionSettings"
+                             class="flex flex-col sm:flex-row items-center justify-between bg-white rounded-lg p-4 border border-gray-200">
+                            <div class="flex items-center space-x-4 mb-3 sm:mb-0">
+                                <div class="flex items-center">
+                                    <i class="fas fa-arrow-trend-up text-green-500 mr-2"></i>
+                                    <span class="text-sm text-gray-600">목표가</span>
+                                    <span class="ml-2 text-lg font-bold text-green-600">+<span x-text="autoTradingSettings.target_profit_percent"></span>%</span>
+                                </div>
+                                <div class="w-px h-6 bg-gray-300 hidden sm:block"></div>
+                                <div class="flex items-center">
+                                    <i class="fas fa-arrow-trend-down text-red-500 mr-2"></i>
+                                    <span class="text-sm text-gray-600">손절가</span>
+                                    <span class="ml-2 text-lg font-bold text-red-600">-<span x-text="autoTradingSettings.stop_loss_percent"></span>%</span>
+                                </div>
+                            </div>
+                            <p class="text-xs text-gray-500">
+                                <i class="fas fa-info-circle mr-1"></i>
+                                위 버튼을 눌러 설정 변경
+                            </p>
+                        </div>
+
+                        <!-- 현재 설정값 표시 (실행 중일 때) -->
+                        <div x-show="autoTradingStatus?.is_running" class="grid grid-cols-2 gap-4">
+                            <div class="bg-white rounded-xl p-4 border-2 border-green-300 text-center shadow-sm">
+                                <div class="flex items-center justify-center text-green-600 mb-2">
+                                    <i class="fas fa-arrow-trend-up mr-2"></i>
+                                    <span class="text-sm font-medium">목표가 (익절)</span>
+                                </div>
+                                <p class="text-4xl font-black text-green-600">+<span x-text="autoTradingStatus?.target_profit_percent || 10"></span><span class="text-2xl">%</span></p>
+                                <p class="text-xs text-gray-500 mt-1">도달 시 자동 매도</p>
+                            </div>
+                            <div class="bg-white rounded-xl p-4 border-2 border-red-300 text-center shadow-sm">
+                                <div class="flex items-center justify-center text-red-600 mb-2">
+                                    <i class="fas fa-arrow-trend-down mr-2"></i>
+                                    <span class="text-sm font-medium">손절가 (손절)</span>
+                                </div>
+                                <p class="text-4xl font-black text-red-600">-<span x-text="autoTradingStatus?.stop_loss_percent || 10"></span><span class="text-2xl">%</span></p>
+                                <p class="text-xs text-gray-500 mt-1">도달 시 자동 매도</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 상태 저장/복원 안내 -->
+                    <div class="bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-xl p-5 shadow-sm">
+                        <div class="flex items-start space-x-3">
+                            <div class="flex-shrink-0">
+                                <div class="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center">
+                                    <i class="fas fa-save text-white text-xl"></i>
+                                </div>
+                            </div>
+                            <div class="flex-1">
+                                <h4 class="font-bold text-gray-900 mb-2 flex items-center">
+                                    <i class="fas fa-shield-alt text-blue-500 mr-2"></i>
+                                    안전한 자동매매 - 상태 자동 저장
+                                </h4>
+                                <div class="space-y-2 text-sm text-gray-700">
+                                    <p class="flex items-start">
+                                        <i class="fas fa-check-circle text-green-500 mr-2 mt-0.5"></i>
+                                        <span>컴퓨터가 꺼져도 걱정 없어요! 모든 포지션과 거래 정보가 자동으로 저장됩니다.</span>
+                                    </p>
+                                    <p class="flex items-start">
+                                        <i class="fas fa-database text-blue-500 mr-2 mt-0.5"></i>
+                                        <span><strong>자동 저장 시점:</strong> 매수/매도 시, 코인 교체 시, 60초마다 자동 저장</span>
+                                    </p>
+                                    <p class="flex items-start">
+                                        <i class="fas fa-redo text-purple-500 mr-2 mt-0.5"></i>
+                                        <span><strong>복원 방법:</strong> 서버 재시작 후 '자동매매 시작'을 누르면 이전 포지션 그대로 계속됩니다.</span>
+                                    </p>
+                                    <div class="mt-3 pt-3 border-t border-blue-200">
+                                        <p class="text-xs text-gray-600 flex items-center">
+                                            <i class="fas fa-folder text-gray-400 mr-2"></i>
+                                            저장 위치: <code class="ml-1 px-2 py-0.5 bg-white rounded text-blue-700 font-mono">auto_trading_state.json</code>
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 거래 내역 -->
+                    <div x-show="autoTradingStatus?.trade_history?.length > 0" class="card rounded-lg p-6">
+                        <h4 class="font-semibold text-gray-900 mb-4">
+                            <i class="fas fa-history text-gray-500 mr-2"></i>거래 내역
+                        </h4>
+                        <div class="overflow-x-auto max-h-64 overflow-y-auto">
+                            <table class="w-full">
+                                <thead class="bg-gray-50 border-b sticky top-0">
+                                    <tr>
+                                        <th class="text-left py-2 px-4 text-sm font-semibold text-gray-700">시간</th>
+                                        <th class="text-left py-2 px-4 text-sm font-semibold text-gray-700">코인</th>
+                                        <th class="text-center py-2 px-4 text-sm font-semibold text-gray-700">액션</th>
+                                        <th class="text-right py-2 px-4 text-sm font-semibold text-gray-700">가격</th>
+                                        <th class="text-right py-2 px-4 text-sm font-semibold text-gray-700">금액/수량</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template x-for="(trade, index) in (autoTradingStatus?.trade_history || []).slice().reverse().slice(0, 20)" :key="index">
+                                        <tr class="border-b">
+                                            <td class="py-2 px-4 text-sm text-gray-600" x-text="formatTradeTime(trade.time)"></td>
+                                            <td class="py-2 px-4 text-sm font-medium" x-text="trade.market"></td>
+                                            <td class="py-2 px-4 text-center">
+                                                <span class="px-2 py-1 rounded text-xs font-medium"
+                                                      :class="trade.action?.includes('BUY') ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'"
+                                                      x-text="trade.action?.includes('BUY') ? '매수' : '매도'"></span>
+                                            </td>
+                                            <td class="py-2 px-4 text-right font-mono text-sm" x-text="'₩ ' + formatPrice(trade.price)"></td>
+                                            <td class="py-2 px-4 text-right text-sm"
+                                                x-text="trade.amount ? '₩ ' + formatPrice(trade.amount) : trade.volume?.toFixed(8)"></td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- 주의사항 -->
+                    <div class="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                        <div class="flex items-start">
+                            <i class="fas fa-exclamation-circle text-orange-500 mt-0.5 mr-3"></i>
+                            <div>
+                                <h4 class="font-medium text-orange-800">투자 주의사항</h4>
+                                <ul class="text-sm text-orange-700 mt-1 space-y-1">
+                                    <li>- AI 자동매매는 손실이 발생할 수 있습니다. 감당 가능한 금액만 투자하세요.</li>
+                                    <li>- 리밸런싱 시 모든 포지션이 청산 후 새로운 코인으로 재투자됩니다.</li>
+                                    <li>- 자동매매 중지 시 모든 포지션이 즉시 청산됩니다.</li>
+                                    <li>- 컴퓨터가 꺼지면 자동매매가 중단되며, 보유 코인은 매도되지 않고 그대로 남습니다.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ========== 코인 차트 모달 ========== -->
+                    <div x-show="selectedCoinForChart"
+                         x-transition:enter="transition ease-out duration-300"
+                         x-transition:enter-start="opacity-0"
+                         x-transition:enter-end="opacity-100"
+                         x-transition:leave="transition ease-in duration-200"
+                         x-transition:leave-start="opacity-100"
+                         x-transition:leave-end="opacity-0"
+                         class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+                         @click.self="closeCoinChart()">
+                        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden"
+                             x-transition:enter="transition ease-out duration-300"
+                             x-transition:enter-start="opacity-0 transform scale-95"
+                             x-transition:enter-end="opacity-100 transform scale-100">
+                            <!-- 모달 헤더 -->
+                            <div class="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-4">
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center space-x-4">
+                                        <div>
+                                            <h3 class="text-xl font-bold" x-text="selectedCoinForChart?.market || ''"></h3>
+                                            <p class="text-blue-100 text-sm" x-text="selectedCoinForChart?.name || ''"></p>
+                                        </div>
+                                        <div class="flex items-center space-x-2">
+                                            <span class="px-3 py-1 rounded-full text-sm font-medium"
+                                                  :class="selectedCoinForChart?.recommendation?.includes('매수')
+                                                          ? 'bg-red-500 text-white'
+                                                          : selectedCoinForChart?.recommendation?.includes('매도')
+                                                            ? 'bg-blue-400 text-white'
+                                                            : 'bg-gray-200 text-gray-700'"
+                                                  x-text="selectedCoinForChart?.recommendation || '분석중'"></span>
+                                            <span class="px-3 py-1 bg-white bg-opacity-20 rounded-full text-sm">
+                                                점수: <span class="font-bold" x-text="selectedCoinForChart?.score || '-'"></span>/100
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <button @click="closeCoinChart()"
+                                            class="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-2 transition">
+                                        <i class="fas fa-times text-xl"></i>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- 모달 바디 -->
+                            <div class="p-6 overflow-y-auto" style="max-height: calc(90vh - 200px);">
+                                <!-- 현재가 및 포지션 정보 -->
+                                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                                    <div class="bg-gray-50 rounded-lg p-4">
+                                        <p class="text-sm text-gray-500">현재가</p>
+                                        <p class="text-xl font-bold text-gray-900" x-text="coinChartData?.currentPrice ? '₩ ' + formatPrice(coinChartData.currentPrice) : '-'"></p>
+                                    </div>
+                                    <div class="bg-gray-50 rounded-lg p-4">
+                                        <p class="text-sm text-gray-500">24시간 변동</p>
+                                        <p class="text-xl font-bold"
+                                           :class="(coinChartData?.changeRate || 0) >= 0 ? 'text-red-600' : 'text-blue-600'"
+                                           x-text="coinChartData?.changeRate ? ((coinChartData.changeRate >= 0 ? '+' : '') + coinChartData.changeRate.toFixed(2) + '%') : '-'"></p>
+                                    </div>
+                                    <div class="bg-gray-50 rounded-lg p-4">
+                                        <p class="text-sm text-gray-500">포지션 상태</p>
+                                        <p class="text-xl font-bold"
+                                           :class="autoTradingStatus?.positions?.[selectedCoinForChart?.market]?.status === 'long' ? 'text-green-600' : 'text-gray-500'"
+                                           x-text="autoTradingStatus?.positions?.[selectedCoinForChart?.market]?.status === 'long' ? '보유 중' : '미보유'"></p>
+                                    </div>
+                                    <div class="bg-gray-50 rounded-lg p-4">
+                                        <p class="text-sm text-gray-500">미실현 손익</p>
+                                        <p class="text-xl font-bold"
+                                           :class="(autoTradingStatus?.positions?.[selectedCoinForChart?.market]?.unrealized_pnl || 0) >= 0 ? 'text-red-600' : 'text-blue-600'"
+                                           x-text="autoTradingStatus?.positions?.[selectedCoinForChart?.market]?.unrealized_pnl !== undefined
+                                                   ? ((autoTradingStatus.positions[selectedCoinForChart.market].unrealized_pnl >= 0 ? '+' : '') + '₩ ' + formatPrice(Math.abs(autoTradingStatus.positions[selectedCoinForChart.market].unrealized_pnl)))
+                                                   : '-'"></p>
+                                    </div>
+                                </div>
+
+                                <!-- AI 예상 가격 정보 -->
+                                <div class="bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg p-4">
+                                    <h4 class="font-semibold text-gray-900 mb-3 flex items-center">
+                                        <i class="fas fa-robot text-purple-500 mr-2"></i>
+                                        AI 예상 매매 가격
+                                    </h4>
+                                    <div class="grid grid-cols-3 gap-4">
+                                        <div class="bg-white bg-opacity-70 rounded-lg p-3">
+                                            <p class="text-xs text-blue-700 font-medium mb-1">
+                                                <i class="fas fa-arrow-down mr-1"></i>AI 매수가
+                                            </p>
+                                            <p class="text-lg font-bold text-blue-800"
+                                               x-text="'₩' + formatPrice(autoTradingStatus?.positions?.[selectedCoinForChart?.market]?.trade_prices?.buy_price || 0)"></p>
+                                            <p class="text-xs text-gray-500 mt-1">최적 진입 가격</p>
+                                        </div>
+                                        <div class="bg-white bg-opacity-70 rounded-lg p-3">
+                                            <p class="text-xs text-green-700 font-medium mb-1">
+                                                <i class="fas fa-bullseye mr-1"></i>목표 매도가
+                                            </p>
+                                            <p class="text-lg font-bold text-green-700"
+                                               x-text="'₩' + formatPrice(autoTradingStatus?.positions?.[selectedCoinForChart?.market]?.trade_prices?.sell_price || 0)"></p>
+                                            <p class="text-xs text-gray-500 mt-1">
+                                                예상 수익: <span class="font-medium text-green-600"
+                                                             x-text="'+' + (autoTradingStatus?.positions?.[selectedCoinForChart?.market]?.trade_prices?.expected_profit_rate || 0).toFixed(1) + '%'"></span>
+                                            </p>
+                                        </div>
+                                        <div class="bg-white bg-opacity-70 rounded-lg p-3">
+                                            <p class="text-xs text-red-700 font-medium mb-1">
+                                                <i class="fas fa-exclamation-triangle mr-1"></i>손절가
+                                            </p>
+                                            <p class="text-lg font-bold text-red-700"
+                                               x-text="'₩' + formatPrice(autoTradingStatus?.positions?.[selectedCoinForChart?.market]?.trade_prices?.stop_loss || 0)"></p>
+                                            <p class="text-xs text-gray-500 mt-1">
+                                                최대 손실: <span class="font-medium text-red-600"
+                                                             x-text="'-' + (autoTradingStatus?.positions?.[selectedCoinForChart?.market]?.trade_prices?.risk_rate || 0).toFixed(1) + '%'"></span>
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 차트 -->
+                                <div class="bg-white border rounded-lg p-4">
+                                    <div class="flex items-center justify-between mb-4">
+                                        <h4 class="font-semibold text-gray-900">
+                                            <i class="fas fa-chart-line text-blue-500 mr-2"></i>실시간 가격 차트
+                                        </h4>
+                                        <div class="flex space-x-2">
+                                            <button @click="loadCoinChartData(selectedCoinForChart?.market, 30, true)"
+                                                    :class="coinChartPeriod === 30 ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'"
+                                                    class="px-3 py-1 rounded text-sm transition">30분</button>
+                                            <button @click="loadCoinChartData(selectedCoinForChart?.market, 60, true)"
+                                                    :class="coinChartPeriod === 60 ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'"
+                                                    class="px-3 py-1 rounded text-sm transition">1시간</button>
+                                            <button @click="loadCoinChartData(selectedCoinForChart?.market, 120, true)"
+                                                    :class="coinChartPeriod === 120 ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'"
+                                                    class="px-3 py-1 rounded text-sm transition">2시간</button>
+                                        </div>
+                                    </div>
+                                    <div x-show="coinChartLoading" class="flex items-center justify-center h-64">
+                                        <div class="text-center">
+                                            <i class="fas fa-spinner fa-spin text-4xl text-blue-500 mb-2"></i>
+                                            <p class="text-gray-500">차트 로딩 중...</p>
+                                        </div>
+                                    </div>
+                                    <div x-show="!coinChartLoading" id="coin-detail-chart" class="w-full h-64"></div>
+                                </div>
+
+                                <!-- 매매 이력 (해당 코인만) -->
+                                <div x-show="getCoinTradeHistory(selectedCoinForChart?.market).length > 0" class="mt-6">
+                                    <h4 class="font-semibold text-gray-900 mb-3">
+                                        <i class="fas fa-history text-gray-500 mr-2"></i>매매 이력
+                                    </h4>
+                                    <div class="bg-gray-50 rounded-lg overflow-hidden">
+                                        <table class="w-full">
+                                            <thead class="bg-gray-100">
+                                                <tr>
+                                                    <th class="text-left py-2 px-4 text-sm font-medium text-gray-600">시간</th>
+                                                    <th class="text-center py-2 px-4 text-sm font-medium text-gray-600">액션</th>
+                                                    <th class="text-right py-2 px-4 text-sm font-medium text-gray-600">가격</th>
+                                                    <th class="text-right py-2 px-4 text-sm font-medium text-gray-600">금액/수량</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <template x-for="(trade, idx) in getCoinTradeHistory(selectedCoinForChart?.market).slice(0, 10)" :key="idx">
+                                                    <tr class="border-t border-gray-200">
+                                                        <td class="py-2 px-4 text-sm text-gray-600" x-text="formatTradeTime(trade.time)"></td>
+                                                        <td class="py-2 px-4 text-center">
+                                                            <span class="px-2 py-1 rounded text-xs font-medium"
+                                                                  :class="trade.action?.includes('BUY') ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'"
+                                                                  x-text="trade.action?.includes('BUY') ? '매수' : '매도'"></span>
+                                                        </td>
+                                                        <td class="py-2 px-4 text-right font-mono text-sm" x-text="'₩ ' + formatPrice(trade.price)"></td>
+                                                        <td class="py-2 px-4 text-right text-sm"
+                                                            x-text="trade.amount ? '₩ ' + formatPrice(trade.amount) : trade.volume?.toFixed(8)"></td>
+                                                    </tr>
+                                                </template>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ========== 수동 선택 패널 (기존 코드) ========== -->
+                <div x-show="apiConnected && tradingMode === 'manual'" class="space-y-6">
+
+                <!-- API 연결 안됨 경고 -->
+                <div x-show="!apiConnected" class="mb-6">
+                    <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                        <div class="flex items-start">
+                            <i class="fas fa-exclamation-triangle text-yellow-500 mt-0.5 mr-3"></i>
+                            <div>
+                                <h4 class="font-medium text-yellow-800">API 키 설정 필요</h4>
+                                <p class="text-sm text-yellow-700 mt-1">
+                                    자동매매를 사용하려면 <code class="bg-yellow-100 px-1 rounded">.env</code> 파일에 업비트 API 키를 설정하세요.
+                                </p>
+                                <pre class="text-xs text-yellow-700 mt-2 bg-yellow-100 p-2 rounded">UPBIT_ACCESS_KEY=your_access_key
+UPBIT_SECRET_KEY=your_secret_key</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 자동매매 설정 및 상태 -->
+                <div x-show="apiConnected" class="space-y-6">
+                    <!-- 설정 카드 -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <!-- 매매 설정 -->
+                        <div class="card rounded-lg p-6">
+                            <h4 class="font-semibold text-gray-900 mb-4">
+                                <i class="fas fa-cog text-gray-500 mr-2"></i>매매 설정
+                            </h4>
+                            <div class="space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">거래 마켓</label>
+                                    <select x-model="tradingSettings.market"
+                                            :disabled="tradingStatus?.is_running"
+                                            @change="resetChart(); loadChartData()"
+                                            class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:bg-gray-100">
+                                        <option value="KRW-BTC">KRW-BTC (비트코인)</option>
+                                        <option value="KRW-ETH">KRW-ETH (이더리움)</option>
+                                        <option value="KRW-XRP">KRW-XRP (리플)</option>
+                                        <option value="KRW-SOL">KRW-SOL (솔라나)</option>
+                                        <option value="KRW-DOGE">KRW-DOGE (도지코인)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">거래 주기 (초)</label>
+                                    <select x-model="tradingSettings.interval"
+                                            :disabled="tradingStatus?.is_running"
+                                            class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:bg-gray-100">
+                                        <option value="30">30초</option>
+                                        <option value="60">1분</option>
+                                        <option value="180">3분</option>
+                                        <option value="300">5분</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">최대 거래 금액 (KRW)</label>
+                                    <input type="number" x-model="tradingSettings.max_trade_amount"
+                                           :disabled="tradingStatus?.is_running"
+                                           min="5000" step="10000"
+                                           class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:bg-gray-100">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 현재 상태 -->
+                        <div class="card rounded-lg p-6">
+                            <h4 class="font-semibold text-gray-900 mb-4">
+                                <i class="fas fa-chart-line text-gray-500 mr-2"></i>현재 상태
+                            </h4>
+                            <div class="space-y-3">
+                                <div class="flex justify-between items-center">
+                                    <span class="text-gray-600">상태</span>
+                                    <span class="px-2 py-1 rounded text-sm font-medium"
+                                          :class="tradingStatus?.is_running ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'"
+                                          x-text="tradingStatus?.is_running ? '실행 중' : '중지됨'"></span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-gray-600">현재 가격</span>
+                                    <span class="font-mono font-medium" x-text="tradingStatus?.last_price ? '₩ ' + formatPrice(tradingStatus.last_price) : '-'"></span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-gray-600">포지션</span>
+                                    <span class="font-medium"
+                                          :class="tradingStatus?.current_position === 'long' ? 'text-red-600' : 'text-gray-600'"
+                                          x-text="tradingStatus?.current_position || '없음'"></span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-gray-600">마지막 액션</span>
+                                    <span class="font-medium"
+                                          :class="{
+                                              'text-red-600': tradingStatus?.last_action === 'BUY',
+                                              'text-blue-600': tradingStatus?.last_action === 'SELL',
+                                              'text-gray-600': tradingStatus?.last_action === 'HOLD'
+                                          }"
+                                          x-text="tradingStatus?.last_action || '-'"></span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-gray-600">거래 횟수</span>
+                                    <span class="font-medium" x-text="tradingStatus?.trade_count || 0"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 수익 현황 -->
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">시작 잔고</p>
+                            <p class="text-xl font-bold"
+                               :class="tradingStatus?.start_balance > 0 ? 'text-gray-900' : 'text-orange-500'"
+                               x-text="tradingStatus?.start_balance > 0 ? '₩ ' + formatPrice(tradingStatus.start_balance) : '잔고없음'"></p>
+                        </div>
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">현재 자산</p>
+                            <p class="text-xl font-bold"
+                               :class="tradingStatus?.current_balance > 0 ? 'text-gray-900' : 'text-orange-500'"
+                               x-text="tradingStatus?.current_balance > 0 ? '₩ ' + formatPrice(tradingStatus.current_balance) : '잔고없음'"></p>
+                        </div>
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">손익</p>
+                            <p class="text-xl font-bold"
+                               :class="(tradingStatus?.profit || 0) >= 0 ? 'text-red-600' : 'text-blue-600'"
+                               x-text="tradingStatus?.start_balance > 0 ? ((tradingStatus.profit >= 0 ? '+' : '') + '₩ ' + formatPrice(Math.abs(tradingStatus.profit || 0))) : '-'"></p>
+                        </div>
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">수익률</p>
+                            <p class="text-xl font-bold"
+                               :class="(tradingStatus?.profit_rate || 0) >= 0 ? 'text-red-600' : 'text-blue-600'"
+                               x-text="tradingStatus?.start_balance > 0 ? ((tradingStatus.profit_rate >= 0 ? '+' : '') + (tradingStatus.profit_rate || 0).toFixed(2) + '%') : '-'"></p>
+                        </div>
+                    </div>
+
+                    <!-- 실시간 차트 -->
+                    <div class="card rounded-lg p-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <h4 class="font-semibold text-gray-900">
+                                <i class="fas fa-chart-area text-blue-500 mr-2"></i>실시간 가격 차트
+                                <span class="text-sm font-normal text-gray-500 ml-2" x-text="tradingSettings.market"></span>
+                            </h4>
+                            <div class="flex items-center space-x-2">
+                                <span class="text-xs text-gray-500">
+                                    <span class="inline-block w-3 h-3 bg-red-500 rounded-full mr-1"></span>매수
+                                </span>
+                                <span class="text-xs text-gray-500">
+                                    <span class="inline-block w-3 h-3 bg-blue-500 rounded-full mr-1"></span>매도
+                                </span>
+                            </div>
+                        </div>
+                        <div id="trading-chart" class="w-full" style="height: 350px;"></div>
+                    </div>
+
+                    <!-- 컨트롤 버튼 -->
+                    <div class="flex justify-center space-x-4">
+                        <button @click="startTrading()"
+                                :disabled="tradingStatus?.is_running || tradingLoading"
+                                class="px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed font-medium">
+                            <i class="fas fa-play mr-2"></i>
+                            <span x-text="tradingLoading ? '처리 중...' : '자동매매 시작'"></span>
+                        </button>
+                        <button @click="stopTrading()"
+                                :disabled="!tradingStatus?.is_running || tradingLoading"
+                                class="px-8 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed font-medium">
+                            <i class="fas fa-stop mr-2"></i>
+                            <span x-text="tradingLoading ? '처리 중...' : '자동매매 중지'"></span>
+                        </button>
+                    </div>
+
+                    <!-- 거래 내역 -->
+                    <div class="card rounded-lg p-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <h4 class="font-semibold text-gray-900">
+                                <i class="fas fa-history text-gray-500 mr-2"></i>거래 내역
+                            </h4>
+                            <button @click="loadTradingHistory()"
+                                    class="text-sm text-blue-600 hover:text-blue-800">
+                                <i class="fas fa-sync-alt mr-1"></i>새로고침
+                            </button>
+                        </div>
+
+                        <div x-show="tradingHistory.length === 0" class="text-center py-8 text-gray-500">
+                            <i class="fas fa-inbox text-3xl mb-2"></i>
+                            <p>거래 내역이 없습니다</p>
+                        </div>
+
+                        <div x-show="tradingHistory.length > 0" class="overflow-x-auto">
+                            <table class="w-full">
+                                <thead class="bg-gray-50 border-b">
+                                    <tr>
+                                        <th class="text-left py-2 px-4 text-sm font-semibold text-gray-700">시간</th>
+                                        <th class="text-center py-2 px-4 text-sm font-semibold text-gray-700">액션</th>
+                                        <th class="text-right py-2 px-4 text-sm font-semibold text-gray-700">가격</th>
+                                        <th class="text-right py-2 px-4 text-sm font-semibold text-gray-700">금액/수량</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template x-for="(trade, index) in tradingHistory.slice().reverse()" :key="index">
+                                        <tr class="border-b">
+                                            <td class="py-2 px-4 text-sm text-gray-600" x-text="formatTradeTime(trade.time)"></td>
+                                            <td class="py-2 px-4 text-center">
+                                                <span class="px-2 py-1 rounded text-xs font-medium"
+                                                      :class="trade.action === 'BUY' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'"
+                                                      x-text="trade.action === 'BUY' ? '매수' : '매도'"></span>
+                                            </td>
+                                            <td class="py-2 px-4 text-right font-mono text-sm" x-text="'₩ ' + formatPrice(trade.price)"></td>
+                                            <td class="py-2 px-4 text-right text-sm"
+                                                x-text="trade.amount ? '₩ ' + formatPrice(trade.amount) : trade.volume?.toFixed(8)"></td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- 주의사항 -->
+                    <div class="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                        <div class="flex items-start">
+                            <i class="fas fa-exclamation-circle text-orange-500 mt-0.5 mr-3"></i>
+                            <div>
+                                <h4 class="font-medium text-orange-800">투자 주의사항</h4>
+                                <ul class="text-sm text-orange-700 mt-1 space-y-1">
+                                    <li>- 자동매매는 AI 모델의 예측을 기반으로 하며, 손실이 발생할 수 있습니다.</li>
+                                    <li>- 투자 금액은 감당 가능한 범위 내에서 설정하세요.</li>
+                                    <li>- 시장 상황에 따라 예측이 틀릴 수 있으므로 주기적으로 모니터링하세요.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 설정 -->
+            <div x-show="activeTab === 'settings'" class="p-6">
+                <h3 class="text-lg font-semibold text-gray-900 mb-4">시스템 설정</h3>
+
+                <div class="space-y-6">
+                    <!-- 주요 종목 설정 -->
+                    <div class="card rounded-lg p-4">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <h4 class="font-semibold text-gray-900">주요 종목 실시간 시세 설정</h4>
+                                <p class="text-sm text-gray-500 mt-1">상단에 표시할 종목을 선택하세요 (최대 10개)</p>
+                            </div>
+                            <button @click="showMarketSelector = true"
+                                    class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                                <i class="fas fa-plus mr-2"></i>종목 추가
+                            </button>
+                        </div>
+
+                        <!-- 선택된 종목 목록 -->
+                        <div class="space-y-2">
+                            <template x-for="(market, index) in watchlistMarkets" :key="market">
+                                <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                    <div class="flex items-center">
+                                        <span class="w-6 h-6 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center text-sm font-medium mr-3"
+                                              x-text="index + 1"></span>
+                                        <div>
+                                            <span class="font-medium text-gray-900" x-text="market"></span>
+                                            <span class="text-sm text-gray-500 ml-2" x-text="getMarketName(market)"></span>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center space-x-2">
+                                        <button @click="moveWatchlistItem(index, -1)"
+                                                :disabled="index === 0"
+                                                class="p-1.5 text-gray-400 hover:text-gray-600 disabled:opacity-30">
+                                            <i class="fas fa-chevron-up"></i>
+                                        </button>
+                                        <button @click="moveWatchlistItem(index, 1)"
+                                                :disabled="index === watchlistMarkets.length - 1"
+                                                class="p-1.5 text-gray-400 hover:text-gray-600 disabled:opacity-30">
+                                            <i class="fas fa-chevron-down"></i>
+                                        </button>
+                                        <button @click="removeFromWatchlist(market)"
+                                                class="p-1.5 text-red-400 hover:text-red-600">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </template>
+                            <div x-show="watchlistMarkets.length === 0" class="text-center py-8 text-gray-500">
+                                <i class="fas fa-list text-3xl mb-2"></i>
+                                <p>선택된 종목이 없습니다</p>
+                            </div>
+                        </div>
+
+                        <!-- 기본값 복원 버튼 -->
+                        <div class="mt-4 pt-4 border-t">
+                            <button @click="resetWatchlist()"
+                                    class="text-sm text-gray-500 hover:text-gray-700">
+                                <i class="fas fa-undo mr-1"></i>기본값으로 복원
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="card rounded-lg p-4">
+                        <h4 class="font-semibold text-gray-900 mb-2">AI 모델</h4>
+                        <p class="text-sm text-gray-600 mb-4">
+                            현재 규칙 기반 분석을 사용 중입니다. AI 모델을 학습하면 더 정확한 예측이 가능합니다.
+                        </p>
+                        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                            <h5 class="font-medium text-blue-900 mb-2">
+                                <i class="fas fa-info-circle mr-2"></i>AI 모델 학습 방법
+                            </h5>
+                            <ol class="text-sm text-blue-800 space-y-1">
+                                <li>1. 터미널에서 <code class="bg-blue-100 px-2 py-0.5 rounded">conda activate upbit</code> 실행</li>
+                                <li>2. <code class="bg-blue-100 px-2 py-0.5 rounded">python main.py</code> 실행</li>
+                                <li>3. "1번" 선택하여 AI 모델 학습</li>
+                                <li>4. 학습 완료 후 웹앱 재시작</li>
+                            </ol>
+                        </div>
+                    </div>
+
+                    <div class="card rounded-lg p-4">
+                        <h4 class="font-semibold text-gray-900 mb-2">시스템 정보</h4>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">버전</span>
+                                <span class="font-medium">1.0.0</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">업데이트 주기</span>
+                                <span class="font-medium">3초</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">분석 지표</span>
+                                <span class="font-medium">20+개</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 상세 분석 모달 -->
+    <div x-show="selectedMarket"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4"
+         @click.self="closeModal()">
+
+        <div class="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-y-auto"
+             @click.stop>
+            <div class="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
+                <div>
+                    <h3 class="text-xl font-bold text-gray-900" x-text="selectedMarket"></h3>
+                    <p class="text-xs text-gray-500 mt-1">5초마다 자동 업데이트</p>
+                </div>
+                <button @click="closeModal()" class="text-gray-400 hover:text-gray-600">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+
+            <div class="p-6">
+                <div x-show="analysisLoading" class="text-center py-12">
+                    <div class="inline-block w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                    <p class="mt-4 text-gray-600">분석 중...</p>
+                </div>
+
+                <div x-show="!analysisLoading && analysisData" class="space-y-6">
+                    <!-- 기본 정보 -->
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">현재가</p>
+                            <p class="text-2xl font-bold text-gray-900"
+                               x-text="analysisData?.technical ? '₩ ' + formatPrice(analysisData.technical.current_price) : '-'"></p>
+                        </div>
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">RSI</p>
+                            <p class="text-2xl font-bold text-gray-900"
+                               x-text="analysisData?.technical ? analysisData.technical.rsi.toFixed(1) : '-'"></p>
+                        </div>
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">점수</p>
+                            <p class="text-2xl font-bold text-blue-600"
+                               x-text="analysisData?.technical?.score_100 ? analysisData.technical.score_100 + '/100' : '-'"></p>
+                        </div>
+                        <div class="card rounded-lg p-4">
+                            <p class="text-sm text-gray-500 mb-1">추천</p>
+                            <p class="text-lg font-bold"
+                               :class="getRecommendationTextClass(analysisData?.technical?.recommendation)"
+                               x-text="analysisData?.technical ? analysisData.technical.recommendation : '-'"></p>
+                        </div>
+                    </div>
+
+                    <!-- 매매 전략 -->
+                    <div x-show="analysisData?.technical?.trade_prices" class="card rounded-lg p-6 bg-blue-50 border-2 border-blue-200">
+                        <h4 class="font-semibold text-gray-900 mb-4 flex items-center">
+                            <i class="fas fa-coins text-blue-600 mr-2"></i>
+                            추천 매매 전략
+                        </h4>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div class="bg-white rounded-lg p-4 border-2 border-blue-400">
+                                <p class="text-sm text-gray-500 mb-2 flex items-center">
+                                    <i class="fas fa-arrow-down text-blue-600 mr-1"></i>
+                                    매수 가격
+                                </p>
+                                <p class="text-3xl font-bold text-blue-600 mb-1"
+                                   x-text="analysisData?.technical?.trade_prices ? '₩ ' + formatPrice(analysisData.technical.trade_prices.buy_price) : '-'"></p>
+                                <p class="text-xs text-gray-600">볼린저 하단 & RSI 기준</p>
+                            </div>
+                            <div class="bg-white rounded-lg p-4 border-2 border-red-400">
+                                <p class="text-sm text-gray-500 mb-2 flex items-center">
+                                    <i class="fas fa-arrow-up text-red-600 mr-1"></i>
+                                    목표 매도가
+                                </p>
+                                <p class="text-3xl font-bold text-red-600 mb-1"
+                                   x-text="analysisData?.technical?.trade_prices ? '₩ ' + formatPrice(analysisData.technical.trade_prices.sell_price) : '-'"></p>
+                                <p class="text-xs text-green-600 font-semibold"
+                                   x-text="analysisData?.technical?.trade_prices ? '기대 수익률: +' + analysisData.technical.trade_prices.expected_profit_rate + '%' : ''"></p>
+                            </div>
+                            <div class="bg-white rounded-lg p-4 border-2 border-orange-400">
+                                <p class="text-sm text-gray-500 mb-2 flex items-center">
+                                    <i class="fas fa-exclamation-triangle text-orange-600 mr-1"></i>
+                                    손절 가격
+                                </p>
+                                <p class="text-3xl font-bold text-orange-600 mb-1"
+                                   x-text="analysisData?.technical?.trade_prices ? '₩ ' + formatPrice(analysisData.technical.trade_prices.stop_loss) : '-'"></p>
+                                <p class="text-xs text-orange-600 font-semibold"
+                                   x-text="analysisData?.technical?.trade_prices ? '리스크: -' + analysisData.technical.trade_prices.risk_rate + '%' : ''"></p>
+                            </div>
+                        </div>
+                        <div class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                            <p class="text-sm text-gray-700">
+                                <i class="fas fa-info-circle text-yellow-600 mr-1"></i>
+                                <strong>투자 전략:</strong>
+                                <span x-text="analysisData?.technical?.trade_prices?.buy_price ?
+                                    '매수가 근처에서 분할 매수하고, 목표가 도달 시 분할 매도를 권장합니다. 손절가 이하로 하락 시 즉시 손절하세요.' :
+                                    '기술적 분석을 참고하여 신중히 투자하세요.'"></span>
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- 실시간 시장 정보 -->
+                    <div class="card rounded-lg p-6">
+                        <h4 class="font-semibold text-gray-900 mb-4">실시간 시장 정보</h4>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div>
+                                <p class="text-sm text-gray-500">시가</p>
+                                <p class="font-semibold text-gray-900"
+                                   x-text="analysisData?.market_info?.opening_price ? '₩ ' + formatPrice(analysisData.market_info.opening_price) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">고가</p>
+                                <p class="font-semibold text-red-600"
+                                   x-text="analysisData?.market_info?.high_price ? '₩ ' + formatPrice(analysisData.market_info.high_price) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">저가</p>
+                                <p class="font-semibold text-blue-600"
+                                   x-text="analysisData?.market_info?.low_price ? '₩ ' + formatPrice(analysisData.market_info.low_price) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">전일종가</p>
+                                <p class="font-semibold text-gray-900"
+                                   x-text="analysisData?.market_info?.prev_closing_price ? '₩ ' + formatPrice(analysisData.market_info.prev_closing_price) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">24h 거래대금</p>
+                                <p class="font-semibold text-gray-900"
+                                   x-text="analysisData?.market_info?.acc_trade_price_24h ? '₩ ' + formatVolume(analysisData.market_info.acc_trade_price_24h) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">24h 거래량</p>
+                                <p class="font-semibold text-gray-900"
+                                   x-text="analysisData?.market_info?.acc_trade_volume_24h ? formatVolume(analysisData.market_info.acc_trade_volume_24h) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">52주 최고</p>
+                                <p class="font-semibold text-red-600"
+                                   x-text="analysisData?.market_info?.highest_52_week_price ? '₩ ' + formatPrice(analysisData.market_info.highest_52_week_price) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">52주 최저</p>
+                                <p class="font-semibold text-blue-600"
+                                   x-text="analysisData?.market_info?.lowest_52_week_price ? '₩ ' + formatPrice(analysisData.market_info.lowest_52_week_price) : '-'"></p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 기술적 지표 상세 -->
+                    <div class="card rounded-lg p-6">
+                        <h4 class="font-semibold text-gray-900 mb-4">기술적 지표 상세</h4>
+                        <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+                            <div>
+                                <p class="text-sm text-gray-500">SMA 5</p>
+                                <p class="font-semibold text-gray-900"
+                                   x-text="analysisData?.technical?.sma_5 ? '₩ ' + formatPrice(analysisData.technical.sma_5) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">SMA 20</p>
+                                <p class="font-semibold text-gray-900"
+                                   x-text="analysisData?.technical?.sma_20 ? '₩ ' + formatPrice(analysisData.technical.sma_20) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">SMA 60</p>
+                                <p class="font-semibold text-gray-900"
+                                   x-text="analysisData?.technical?.sma_60 ? '₩ ' + formatPrice(analysisData.technical.sma_60) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">MACD</p>
+                                <p class="font-semibold text-gray-900"
+                                   x-text="analysisData?.technical?.macd ? analysisData.technical.macd.toFixed(2) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">Signal</p>
+                                <p class="font-semibold text-gray-900"
+                                   x-text="analysisData?.technical?.macd_signal ? analysisData.technical.macd_signal.toFixed(2) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">Bollinger 상단</p>
+                                <p class="font-semibold text-gray-900"
+                                   x-text="analysisData?.technical?.bb_high ? '₩ ' + formatPrice(analysisData.technical.bb_high) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">Bollinger 하단</p>
+                                <p class="font-semibold text-gray-900"
+                                   x-text="analysisData?.technical?.bb_low ? '₩ ' + formatPrice(analysisData.technical.bb_low) : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">1일 변동</p>
+                                <p class="font-semibold"
+                                   :class="analysisData?.technical?.price_change_1d > 0 ? 'text-red-600' : 'text-blue-600'"
+                                   x-text="analysisData?.technical?.price_change_1d ? (analysisData.technical.price_change_1d > 0 ? '+' : '') + analysisData.technical.price_change_1d.toFixed(2) + '%' : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">7일 변동</p>
+                                <p class="font-semibold"
+                                   :class="analysisData?.technical?.price_change_7d > 0 ? 'text-red-600' : 'text-blue-600'"
+                                   x-text="analysisData?.technical?.price_change_7d ? (analysisData.technical.price_change_7d > 0 ? '+' : '') + analysisData.technical.price_change_7d.toFixed(2) + '%' : '-'"></p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- AI 예측 -->
+                    <div x-show="analysisData?.ai_prediction" class="card rounded-lg p-6">
+                        <h4 class="font-semibold text-gray-900 mb-4">AI 예측 정보</h4>
+                        <div class="grid grid-cols-3 gap-4">
+                            <div>
+                                <p class="text-sm text-gray-500">예측</p>
+                                <p class="font-semibold text-gray-900" x-text="analysisData?.ai_prediction?.direction || '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">신뢰도</p>
+                                <p class="font-semibold text-gray-900"
+                                   x-text="analysisData?.ai_prediction ? (analysisData.ai_prediction.confidence * 100).toFixed(1) + '%' : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">액션</p>
+                                <p class="font-semibold text-gray-900" x-text="analysisData?.ai_prediction?.action_text || '-'"></p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 뉴스 감정 분석 -->
+                    <div x-show="analysisData?.news_signal" class="card rounded-lg p-6">
+                        <h4 class="font-semibold text-gray-900 mb-4">
+                            <i class="fas fa-newspaper text-blue-500 mr-2"></i>뉴스 감정 분석
+                        </h4>
+
+                        <!-- 뉴스 없음 -->
+                        <div x-show="analysisData?.news_signal?.news_count === 0" class="text-center py-6">
+                            <i class="fas fa-newspaper text-gray-300 text-4xl mb-3"></i>
+                            <p class="text-gray-500 mb-2">해당 코인의 뉴스를 찾을 수 없습니다</p>
+                            <p class="text-xs text-gray-400">영문 뉴스만 지원됩니다</p>
+                        </div>
+
+                        <!-- 뉴스 있음 -->
+                        <div x-show="analysisData?.news_signal?.news_count > 0">
+                        <div class="grid grid-cols-4 gap-4 mb-4">
+                            <div>
+                                <p class="text-sm text-gray-500">뉴스 신호</p>
+                                <p class="text-xl font-bold"
+                                   :class="{
+                                       'text-red-600': analysisData?.news_signal?.signal === 'BUY',
+                                       'text-blue-600': analysisData?.news_signal?.signal === 'SELL',
+                                       'text-gray-600': analysisData?.news_signal?.signal === 'HOLD'
+                                   }"
+                                   x-text="analysisData?.news_signal?.signal_kr || '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">긍정 비율</p>
+                                <p class="text-xl font-bold"
+                                   :style="'color: ' + getSentimentTextColor(analysisData?.news_signal?.positive_ratio)"
+                                   x-text="analysisData?.news_signal?.positive_ratio ? (analysisData.news_signal.positive_ratio * 100).toFixed(1) + '%' : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">신뢰도</p>
+                                <p class="text-xl font-bold text-blue-600"
+                                   x-text="analysisData?.news_signal?.confidence ? (analysisData.news_signal.confidence * 100).toFixed(1) + '%' : '-'"></p>
+                            </div>
+                            <div>
+                                <p class="text-sm text-gray-500">분석 뉴스</p>
+                                <p class="text-xl font-bold text-gray-900" x-text="analysisData?.news_signal?.news_count || 0"></p>
+                            </div>
+                        </div>
+
+                        <!-- 긍정 비율 바 -->
+                        <div class="mb-4">
+                            <div class="flex justify-between text-xs mb-1">
+                                <span class="text-gray-500">0%</span>
+                                <span class="text-gray-500">50%</span>
+                                <span class="text-gray-500">100%</span>
+                            </div>
+                            <div class="w-full h-3 rounded-full bg-gray-200">
+                                <div class="h-3 rounded-full transition-all"
+                                     :style="'width: ' + (analysisData?.news_signal?.positive_ratio * 100) + '%; background-color: ' + getSentimentColor(analysisData?.news_signal?.positive_ratio)"></div>
+                            </div>
+                            <div class="flex justify-between text-xs mt-1">
+                                <span class="text-red-400">부정적</span>
+                                <span class="text-yellow-500">중립</span>
+                                <span class="text-green-500">긍정적</span>
+                            </div>
+                        </div>
+
+                        <!-- 주요 뉴스 -->
+                        <div x-show="analysisData?.news_signal?.top_news?.length > 0">
+                            <p class="text-sm font-medium text-gray-700 mb-2">주요 뉴스</p>
+                            <div class="space-y-2 max-h-48 overflow-y-auto">
+                                <template x-for="(news, idx) in (analysisData?.news_signal?.top_news || []).slice(0, 3)" :key="idx">
+                                    <a :href="news.url" target="_blank" rel="noopener noreferrer"
+                                       class="flex items-start p-2 bg-gray-50 rounded text-sm hover:bg-gray-100 transition cursor-pointer">
+                                        <span class="inline-block w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center mr-2 flex-shrink-0"
+                                              :class="{
+                                                  'bg-green-100 text-green-700': news.sentiment === 'positive',
+                                                  'bg-red-100 text-red-700': news.sentiment === 'negative',
+                                                  'bg-gray-100 text-gray-600': news.sentiment === 'neutral'
+                                              }"
+                                              x-text="news.sentiment === 'positive' ? '+' : news.sentiment === 'negative' ? '-' : '='"></span>
+                                        <div class="flex-1 min-w-0">
+                                            <p class="text-gray-900 truncate hover:text-blue-600" x-text="news.title"></p>
+                                            <p class="text-xs text-gray-500" x-text="news.source"></p>
+                                        </div>
+                                        <i class="fas fa-external-link-alt text-gray-400 text-xs ml-2 flex-shrink-0"></i>
+                                    </a>
+                                </template>
+                            </div>
+                        </div>
+                        </div>
+                    </div>
+
+                    <!-- 시그널 -->
+                    <div x-show="analysisData?.technical?.signals" class="card rounded-lg p-6">
+                        <h4 class="font-semibold text-gray-900 mb-4">기술적 시그널</h4>
+                        <div class="flex flex-wrap gap-2">
+                            <template x-for="signal in analysisData?.technical?.signals" :key="signal">
+                                <span class="px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm">
+                                    <i class="fas fa-check-circle text-green-500 mr-1"></i>
+                                    <span x-text="signal"></span>
+                                </span>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 종목 선택 모달 -->
+    <div x-show="showMarketSelector"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4"
+         @click.self="showMarketSelector = false">
+
+        <div class="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-hidden"
+             @click.stop>
+            <div class="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
+                <div>
+                    <h3 class="text-xl font-bold text-gray-900">종목 선택</h3>
+                    <p class="text-sm text-gray-500">실시간 시세에 추가할 종목을 선택하세요</p>
+                </div>
+                <button @click="showMarketSelector = false" class="text-gray-400 hover:text-gray-600">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+
+            <div class="p-4 border-b">
+                <input type="text" x-model="marketSelectorSearch"
+                       placeholder="종목명 또는 코드 검색..."
+                       class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            </div>
+
+            <div class="overflow-y-auto max-h-[50vh]">
+                <template x-for="market in filteredMarketsForSelector" :key="market.market">
+                    <div class="flex items-center justify-between px-6 py-3 hover:bg-gray-50 border-b cursor-pointer"
+                         @click="addToWatchlist(market.market)">
+                        <div>
+                            <span class="font-medium text-gray-900" x-text="market.market"></span>
+                            <span class="text-sm text-gray-500 ml-2" x-text="market.korean_name"></span>
+                        </div>
+                        <div class="flex items-center">
+                            <span class="text-sm mr-3"
+                                  :class="market.change_rate > 0 ? 'text-red-600' : 'text-blue-600'"
+                                  x-text="(market.change_rate > 0 ? '+' : '') + market.change_rate.toFixed(2) + '%'"></span>
+                            <span x-show="watchlistMarkets.includes(market.market)"
+                                  class="text-green-500">
+                                <i class="fas fa-check-circle"></i>
+                            </span>
+                            <span x-show="!watchlistMarkets.includes(market.market)"
+                                  class="text-gray-300">
+                                <i class="fas fa-plus-circle"></i>
+                            </span>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <div class="sticky bottom-0 bg-gray-50 border-t px-6 py-4 flex justify-between items-center">
+                <span class="text-sm text-gray-500">
+                    선택됨: <span class="font-medium" x-text="watchlistMarkets.length"></span>/10
+                </span>
+                <button @click="showMarketSelector = false"
+                        class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                    완료
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# 업비트 API
+PyJWT==2.8.0
+requests==2.31.0
+
+# AI/ML 라이브러리
+numpy==1.24.3
+pandas==2.0.3
+torch==2.1.0
+stable-baselines3==2.2.1
+gymnasium==0.29.1
+
+# 데이터 처리 및 시각화
+matplotlib==3.7.2
+seaborn==0.12.2
+ta==0.11.0  # Technical Analysis library
+
+# 유틸리티
+python-dotenv==1.0.0
+pyyaml==6.0.1
+
+# 뉴스 감정 분석
+newsapi-python==0.2.7
+textblob==0.18.0
