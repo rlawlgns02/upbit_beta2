@@ -10,6 +10,68 @@ from urllib.parse import urlencode, unquote
 from typing import Dict, List, Optional
 
 
+def get_tick_size(price: float) -> float:
+    """업비트 호가 단위 계산
+
+    Args:
+        price: 주문 가격
+
+    Returns:
+        해당 가격대의 호가 단위
+    """
+    if price >= 2000000:
+        return 1000
+    elif price >= 1000000:
+        return 500
+    elif price >= 500000:
+        return 100
+    elif price >= 100000:
+        return 50
+    elif price >= 10000:
+        return 10
+    elif price >= 1000:
+        return 5
+    elif price >= 100:
+        return 1
+    elif price >= 10:
+        return 0.1
+    elif price >= 1:
+        return 0.01
+    elif price >= 0.1:
+        return 0.001
+    else:
+        return 0.0001
+
+
+def adjust_price_to_tick(price: float, is_buy: bool = True) -> float:
+    """가격을 호가 단위에 맞게 조정
+
+    Args:
+        price: 원래 가격
+        is_buy: 매수 여부 (True: 내림, False: 올림)
+
+    Returns:
+        호가 단위에 맞춘 가격
+    """
+    tick_size = get_tick_size(price)
+
+    if is_buy:
+        # 매수: 내림 (더 낮은 가격으로)
+        adjusted = (price // tick_size) * tick_size
+    else:
+        # 매도: 올림 (더 높은 가격으로)
+        import math
+        adjusted = math.ceil(price / tick_size) * tick_size
+
+    # 소수점 정밀도 문제 해결
+    if tick_size >= 1:
+        return int(adjusted)
+    else:
+        # 소수점 자릿수 결정
+        decimals = len(str(tick_size).split('.')[-1])
+        return round(adjusted, decimals)
+
+
 class UpbitClient:
     """업비트 거래소 API 클라이언트"""
 
@@ -49,11 +111,20 @@ class UpbitClient:
         params = {'isDetails': 'true'}
         try:
             response = requests.get(url, params=params, timeout=10)
+
+            # HTTP 상태 코드 체크
+            if response.status_code != 200:
+                print(f"[UPBIT] 마켓 조회 실패 - HTTP {response.status_code}: {response.text}")
+                return []
+
             result = response.json()
             if isinstance(result, dict) and 'error' in result:
                 print(f"[UPBIT] 마켓 조회 실패: {result}")
                 return []
             return result
+        except requests.exceptions.Timeout:
+            print(f"[UPBIT] 마켓 조회 타임아웃")
+            return []
         except Exception as e:
             print(f"[UPBIT] 마켓 조회 예외: {e}")
             return []
@@ -70,11 +141,20 @@ class UpbitClient:
         params = {'markets': ','.join(markets)}
         try:
             response = requests.get(url, params=params, timeout=10)
+
+            # HTTP 상태 코드 체크
+            if response.status_code != 200:
+                print(f"[UPBIT] 티커 조회 실패 - HTTP {response.status_code}: {response.text}")
+                return []
+
             result = response.json()
             if isinstance(result, dict) and 'error' in result:
                 print(f"[UPBIT] 티커 조회 실패: {result}")
                 return []
             return result
+        except requests.exceptions.Timeout:
+            print(f"[UPBIT] 티커 조회 타임아웃")
+            return []
         except Exception as e:
             print(f"[UPBIT] 티커 조회 예외: {e}")
             return []
@@ -87,11 +167,20 @@ class UpbitClient:
         params = {'markets': ','.join(markets)}
         try:
             response = requests.get(url, params=params, timeout=10)
+
+            # HTTP 상태 코드 체크
+            if response.status_code != 200:
+                print(f"[UPBIT] 호가 조회 실패 - HTTP {response.status_code}: {response.text}")
+                return []
+
             result = response.json()
             if isinstance(result, dict) and 'error' in result:
                 print(f"[UPBIT] 호가 조회 실패: {result}")
                 return []
             return result
+        except requests.exceptions.Timeout:
+            print(f"[UPBIT] 호가 조회 타임아웃")
+            return []
         except Exception as e:
             print(f"[UPBIT] 호가 조회 예외: {e}")
             return []
@@ -108,11 +197,20 @@ class UpbitClient:
         params = {'market': market, 'count': count}
         try:
             response = requests.get(url, params=params, timeout=15)
+
+            # HTTP 상태 코드 체크
+            if response.status_code != 200:
+                print(f"[UPBIT] 분봉 조회 실패 - HTTP {response.status_code}: {response.text}")
+                return []
+
             result = response.json()
             if isinstance(result, dict) and 'error' in result:
                 print(f"[UPBIT] 분봉 조회 실패: {result}")
                 return []
             return result
+        except requests.exceptions.Timeout:
+            print(f"[UPBIT] 분봉 조회 타임아웃")
+            return []
         except Exception as e:
             print(f"[UPBIT] 분봉 조회 예외: {e}")
             return []
@@ -123,11 +221,20 @@ class UpbitClient:
         params = {'market': market, 'count': count}
         try:
             response = requests.get(url, params=params, timeout=15)
+
+            # HTTP 상태 코드 체크
+            if response.status_code != 200:
+                print(f"[UPBIT] 일봉 조회 실패 - HTTP {response.status_code}: {response.text}")
+                return []
+
             result = response.json()
             if isinstance(result, dict) and 'error' in result:
                 print(f"[UPBIT] 일봉 조회 실패: {result}")
                 return []
             return result
+        except requests.exceptions.Timeout:
+            print(f"[UPBIT] 일봉 조회 타임아웃")
+            return []
         except Exception as e:
             print(f"[UPBIT] 일봉 조회 예외: {e}")
             return []
@@ -140,12 +247,24 @@ class UpbitClient:
         headers = self._get_headers()
         try:
             response = requests.get(url, headers=headers, timeout=10)
+
+            # HTTP 상태 코드 체크 (인증 실패 등)
+            if response.status_code == 401:
+                print(f"[UPBIT] 계좌 조회 실패 - 인증 실패: API 키를 확인하세요")
+                return []
+            elif response.status_code != 200:
+                print(f"[UPBIT] 계좌 조회 실패 - HTTP {response.status_code}: {response.text}")
+                return []
+
             result = response.json()
             # API 에러 응답 체크
             if isinstance(result, dict) and 'error' in result:
                 print(f"[UPBIT] 계좌 조회 실패: {result}")
                 return []
             return result
+        except requests.exceptions.Timeout:
+            print(f"[UPBIT] 계좌 조회 타임아웃")
+            return []
         except Exception as e:
             print(f"[UPBIT] 계좌 조회 예외: {e}")
             return []  # 타입 일관성을 위해 빈 리스트 반환
@@ -182,12 +301,24 @@ class UpbitClient:
         headers = self._get_headers(query)
         try:
             response = requests.get(url, params=query, headers=headers, timeout=10)
+
+            # HTTP 상태 코드 체크
+            if response.status_code == 401:
+                print(f"[UPBIT] 주문 목록 조회 실패 - 인증 실패")
+                return []
+            elif response.status_code != 200:
+                print(f"[UPBIT] 주문 목록 조회 실패 - HTTP {response.status_code}: {response.text}")
+                return []
+
             result = response.json()
             # API 에러 응답 체크
             if isinstance(result, dict) and 'error' in result:
                 print(f"[UPBIT] 주문 목록 조회 실패: {result}")
                 return []
             return result
+        except requests.exceptions.Timeout:
+            print(f"[UPBIT] 주문 목록 조회 타임아웃")
+            return []
         except Exception as e:
             print(f"[UPBIT] 주문 목록 조회 예외: {e}")
             return []  # 타입 일관성을 위해 빈 리스트 반환
@@ -200,11 +331,20 @@ class UpbitClient:
             price: 주문 가격
             volume: 주문 수량
         """
+        # 호가 단위에 맞게 가격 조정 (매수: 내림)
+        adjusted_price = adjust_price_to_tick(price, is_buy=True)
+
+        # 가격에 따라 정수 또는 소수점 처리
+        if adjusted_price >= 1:
+            price_str = str(int(adjusted_price))
+        else:
+            price_str = str(adjusted_price)
+
         query = {
             'market': market,
             'side': 'bid',
             'ord_type': 'limit',
-            'price': str(int(price)),  # 정수로 변환
+            'price': price_str,
             'volume': str(volume)
         }
 
@@ -262,11 +402,20 @@ class UpbitClient:
             price: 주문 가격
             volume: 주문 수량
         """
+        # 호가 단위에 맞게 가격 조정 (매도: 올림)
+        adjusted_price = adjust_price_to_tick(price, is_buy=False)
+
+        # 가격에 따라 정수 또는 소수점 처리
+        if adjusted_price >= 1:
+            price_str = str(int(adjusted_price))
+        else:
+            price_str = str(adjusted_price)
+
         query = {
             'market': market,
             'side': 'ask',
             'ord_type': 'limit',
-            'price': str(int(price)),  # 정수로 변환
+            'price': price_str,
             'volume': str(volume)
         }
 

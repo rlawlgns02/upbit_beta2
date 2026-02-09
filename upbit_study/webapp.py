@@ -1,4 +1,5 @@
 """
+uvicorn webapp:app --reload --host 127.0.0.1 --port 8000
 업비트 실시간 종목 분석 웹앱
 FastAPI + 현대적인 UI/UX + 자동매매
 """
@@ -15,6 +16,14 @@ from typing import List, Optional, Dict
 import json
 import math
 from datetime import datetime
+
+# optional psutil for resource monitoring (type ignored to allow running without installation)
+try:
+    import psutil  # type: ignore
+except ImportError:
+    psutil = None
+except Exception:
+    psutil = None
 from dotenv import load_dotenv
 import pandas as pd
 import numpy as np
@@ -53,6 +62,10 @@ async def startup_event():
         print("[STARTUP] (이전 포지션 정보가 유지됩니다)")
     else:
         print("[STARTUP] 새로운 세션을 시작합니다.")
+    
+    # LSTM 큐 처리 시작
+    asyncio.create_task(process_lstm_queue())
+    print("[STARTUP] LSTM 학습 큐 처리 시작")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -106,6 +119,59 @@ client = UpbitClient("", "")
 analyzer = MarketAnalyzer(client)
 predictor = AIPredictor()
 news_signal_generator = NewsSignalGenerator()  # 뉴스 신호 생성기
+
+# LSTM 관련 전역 상태: 서버에서 학습/로드/예측 관리를 위한 객체
+lstm_predictors: Dict[str, object] = {}
+lstm_statuses: Dict[str, Dict] = {}
+lstm_tasks: Dict[str, asyncio.Task] = {}
+lstm_queue: List[Dict] = []  # 대기열
+lstm_max_concurrent: int = 3  # 동시에 학습할 최대 코인 수
+
+# LSTM 단타 자동매매 관련 전역 상태
+lstm_scalping_bot = None
+lstm_scalping_task: Optional[asyncio.Task] = None
+lstm_scalping_status = {
+    "is_running": False,
+    "markets": [],
+    "start_time": None,
+    "positions": {},
+    "stats": {},
+    "trade_history": [],
+    "config": {},
+    "use_unified_model": False,
+    "signal_log": []  # 실시간 신호 로그
+}
+lstm_scalping_ws_clients: List[WebSocket] = []  # WebSocket 클라이언트 목록
+
+# LSTM 모듈 로드 (실패해도 서버는 동작하도록 예외 처리)
+try:
+    from src.models.lstm_predictor import LSTMPredictor, get_device
+except Exception as e:
+    LSTMPredictor = None
+    def get_device():
+        return 'cpu'
+    print(f"[WARNING] LSTM 모듈 로드 실패: {e}")
+
+# LSTM 단타 봇 모듈 로드
+try:
+    from src.bot.lstm_scalping_bot import LSTMScalpingBot, LSTMScalpingConfig
+    LSTM_SCALPING_AVAILABLE = True
+except Exception as e:
+    LSTMScalpingBot = None
+    LSTMScalpingConfig = None
+    LSTM_SCALPING_AVAILABLE = False
+    print(f"[WARNING] LSTM 단타 봇 모듈 로드 실패: {e}")
+
+# 통합 LSTM 모델 로드
+try:
+    from src.models.unified_lstm_predictor import UnifiedLSTMPredictor, UnifiedModelConfig, unified_predictor
+    UNIFIED_LSTM_AVAILABLE = True
+except Exception as e:
+    UnifiedLSTMPredictor = None
+    UnifiedModelConfig = None
+    unified_predictor = None
+    UNIFIED_LSTM_AVAILABLE = False
+    print(f"[WARNING] 통합 LSTM 모듈 로드 실패: {e}")
 
 # 자동매매 관련 글로벌 객체
 UPBIT_ACCESS_KEY = os.getenv('UPBIT_ACCESS_KEY', '')
@@ -322,7 +388,7 @@ class RateLimiter:
         for ip in empty_keys:
             del self.requests[ip]
 
-rate_limiter = RateLimiter(max_requests=60, window_seconds=60)  # 분당 60회 제한
+rate_limiter = RateLimiter(max_requests=180, window_seconds=60)  # 분당 180회 제한 (여러 실시간 polling 고려)
 
 # WebSocket 연결 관리
 class ConnectionManager:
@@ -474,6 +540,51 @@ def calculate_trade_prices(tech_data):
     }
 
 
+@app.get('/favicon.ico')
+async def favicon():
+    """Serve favicon"""
+    return FileResponse('static/favicon.svg', media_type='image/svg+xml')
+
+
+@app.post('/api/client-log')
+async def api_client_log(payload: dict):
+    """클라이언트에서 전송한 콘솔/에러 로그를 수집합니다.
+
+    Expects JSON: { level: 'error'|'warn'|'info', message: str, stack?: str, url?: str, userAgent?: str }
+    """
+    try:
+        level = payload.get('level', 'info')
+        message = payload.get('message', '')
+        stack = payload.get('stack')
+        url = payload.get('url')
+        ua = payload.get('userAgent')
+
+        log_entry = {
+            'time': datetime.utcnow().isoformat(),
+            'level': level,
+            'message': message,
+            'stack': stack,
+            'url': url,
+            'userAgent': ua
+        }
+
+        # 간단히 stdout에 기록하고 models/logs 폴더에 파일로 저장
+        print(f"[CLIENT_LOG] {log_entry}")
+        os.makedirs('logs', exist_ok=True)
+        with open(os.path.join('logs', 'client_logs.txt'), 'a', encoding='utf-8') as f:
+            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get('/.well-known/appspecific/com.chrome.devtools.json')
+async def chrome_devtools_probe():
+    """브라우저 개발자 도구가 요청하는 잘 알려진 경로를 204로 응답하여 404 로그를 줄입니다."""
+    return JSONResponse(status_code=204, content=None)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """메인 페이지"""
@@ -584,6 +695,1234 @@ async def get_analysis(market: str):
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ------------------ LSTM 학습 대기열 처리 ------------------
+async def process_lstm_queue():
+    """LSTM 학습 대기열을 처리합니다."""
+    while True:
+        try:
+            # 현재 진행 중인 작업 수 계산
+            running_count = sum(1 for m in lstm_tasks.values() if not m.done())
+            
+            # 동시 실행 제한 내에서 새 작업 시작
+            while running_count < lstm_max_concurrent and lstm_queue:
+                job = lstm_queue.pop(0)
+                market = job['market']
+                
+                if market not in lstm_tasks or lstm_tasks[market].done():
+                    task = asyncio.create_task(train_lstm_background(
+                        market,
+                        job['epochs'],
+                        job['batch_size'],
+                        job['learning_rate'],
+                        job['seq_length'],
+                        job['days'],
+                        resume=job.get('resume', False),
+                        checkpoint_interval=job.get('checkpoint_interval', 5)
+                    ))
+                    lstm_tasks[market] = task
+                    lstm_statuses[market] = {"status": "running", "message": "학습 시작", "queue_position": -1}
+                    running_count += 1
+                    print(f"[LSTM Queue] 학습 시작: {market} (진행 중: {running_count}/{lstm_max_concurrent})")
+                else:
+                    print(f"[LSTM Queue] 이미 진행 중: {market}")
+            
+            # 대기 중인 작업의 위치 업데이트
+            for i, job in enumerate(lstm_queue):
+                market = job['market']
+                if market in lstm_statuses:
+                    lstm_statuses[market]["queue_position"] = i
+            
+            await asyncio.sleep(2)  # 2초마다 체크
+        except Exception as e:
+            print(f"[LSTM Queue Error] {e}")
+            await asyncio.sleep(5)
+
+
+# ------------------ LSTM 학습 및 예측 API ------------------
+class LSTMTrainRequest(BaseModel):
+    market: Optional[str] = None  # 단일 코인 (이전 호환성)
+    markets: Optional[List[str]] = None  # 여러 코인
+    epochs: int = 50
+    batch_size: int = 32
+    learning_rate: float = 0.001
+    seq_length: int = 60
+    days: int = 200
+    resume: bool = False
+    checkpoint_interval: int = 5
+
+
+async def train_lstm_background(market: str, epochs: int, batch_size: int, learning_rate: float, seq_length: int, days: int, resume: bool = False, checkpoint_interval: int = 5):
+    """백그라운드에서 LSTM 학습을 실행하고 상태를 업데이트합니다."""
+    coin = market.replace('KRW-', '').lower()
+    model_path = f"models/lstm_{coin}"
+
+    # 초기 상태
+    lstm_statuses[market] = {"status": "running", "message": "데이터 수집 중", "logs": [], "resource": {}}
+
+    try:
+        df = analyzer.get_market_data(market, days=days)
+        if df is None or len(df) < max(seq_length + 30, 100):
+            lstm_statuses[market] = {"status": "error", "message": "데이터가 부족합니다."}
+            return
+
+        lstm_statuses[market]["message"] = "학습 시작"
+
+        if LSTMPredictor is None:
+            lstm_statuses[market] = {"status": "error", "message": "LSTM 모듈을 사용할 수 없습니다."}
+            return
+
+        predictor = LSTMPredictor(model_path=model_path, seq_length=seq_length, device=get_device())
+        lstm_predictors[market] = predictor
+
+        # progress callback: update status and append logs; include resource usage if psutil available
+        def progress_cb(info: dict):
+            msg = f"Epoch {info.get('epoch')} - train: {info.get('train_loss'):.6f}, val: {info.get('val_loss'):.6f}"
+            lstm_statuses[market]['message'] = msg
+            lstm_statuses[market].setdefault('logs', []).append(msg)
+            # resource monitoring
+            try:
+                if psutil:
+                    p = psutil.Process()
+                    mem = p.memory_info().rss
+                    cpu = psutil.cpu_percent(interval=None)
+                    lstm_statuses[market]['resource'] = {'memory_rss': mem, 'cpu_percent': cpu}
+            except Exception:
+                pass
+
+        # 학습은 CPU/GPU 바운드 작업이므로 스레드에서 실행
+        results = await asyncio.to_thread(
+            predictor.train,
+            df,
+            epochs,
+            batch_size,
+            learning_rate,
+            0.2,
+            15,
+            True,
+            progress_cb,
+            resume,
+            checkpoint_interval
+        )
+
+        # 학습 취소 체크
+        if isinstance(results, dict) and results.get('cancelled'):
+            lstm_statuses[market] = {"status": "cancelled", "message": "학습이 취소되었습니다.", "result": results}
+            return
+
+        await asyncio.to_thread(predictor.save)
+        lstm_predictors[market] = predictor
+
+        # 학습 완료 상태에 저장된 모델 이름을 포함
+        saved_model_name = f"lstm_{coin}.pt"
+        lstm_statuses[market] = {"status": "done", "message": "학습 완료", "result": results, 'logs': lstm_statuses[market].get('logs', []), 'saved_model': saved_model_name}
+
+    except Exception as e:
+        lstm_statuses[market] = {"status": "error", "message": str(e), 'logs': lstm_statuses[market].get('logs', [])}
+
+
+@app.post("/api/lstm/train")
+async def api_lstm_train(req: LSTMTrainRequest):
+    # markets 배열 또는 market 문자열 지원 (이전 호환성)
+    markets = req.markets if req.markets else ([req.market] if req.market else [])
+    
+    if not markets:
+        return {"success": False, "error": "학습할 코인을 선택해주세요"}
+    
+    # 각 마켓이 이미 완료되었거나 대기열에 있는지 확인
+    already_in_queue = [m for m in markets if any(job['market'] == m for job in lstm_queue)]
+    already_running = [m for m in markets if m in lstm_tasks and not lstm_tasks[m].done()]
+    
+    if already_running:
+        return {"success": False, "error": f"이미 학습이 진행 중인 마켓: {', '.join(already_running[:5])}"}
+    
+    # 대기열에 작업 추가
+    added_count = 0
+    for market in markets:
+        # 이미 진행 중이 아니면 대기열에 추가
+        if market not in lstm_tasks or lstm_tasks[market].done():
+            job = {
+                "market": market,
+                "epochs": req.epochs,
+                "batch_size": req.batch_size,
+                "learning_rate": req.learning_rate,
+                "seq_length": req.seq_length,
+                "days": req.days,
+                "resume": req.resume,
+                "checkpoint_interval": req.checkpoint_interval
+            }
+            lstm_queue.append(job)
+            lstm_statuses[market] = {
+                "status": "queued", 
+                "message": f"대기 중 (위치: {len(lstm_queue)})",
+                "queue_position": len(lstm_queue) - 1
+            }
+            added_count += 1
+    
+    running_count = sum(1 for m in lstm_tasks.values() if not m.done())
+    
+    return {
+        "success": True, 
+        "message": f"{added_count}개 코인을 학습 대기열에 추가했습니다. (현재 진행: {running_count}/{lstm_max_concurrent}, 대기: {len(lstm_queue)})",
+        "markets": markets
+    }
+
+
+@app.get('/api/lstm/status')
+async def api_lstm_status(market: str):
+    st = lstm_statuses.get(market, {"status": "idle", "message": "대기 중"})
+    running = market in lstm_tasks and not lstm_tasks[market].done()
+    if running:
+        st["status"] = "running"
+    st["model_loaded"] = market in lstm_predictors
+    return {"success": True, "data": st}
+
+
+@app.get('/api/lstm/status-all')
+async def api_lstm_status_all():
+    """전체 LSTM 학습 상태를 조회합니다."""
+    running_count = sum(1 for m in lstm_tasks.values() if not m.done())
+    completed_count = sum(1 for st in lstm_statuses.values() if st.get("status") == "done")
+    error_count = sum(1 for st in lstm_statuses.values() if st.get("status") == "error")
+    queued_count = len(lstm_queue)
+    
+    return {
+        "success": True,
+        "data": {
+            "running": running_count,
+            "completed": completed_count,
+            "error": error_count,
+            "queued": queued_count,
+            "max_concurrent": lstm_max_concurrent,
+            "queue_position": queued_count,
+            "statuses": lstm_statuses
+        }
+    }
+
+
+@app.get('/api/lstm/models')
+async def api_lstm_models(market: str):
+    """해당 마켓으로 저장된 LSTM 모델 파일 목록을 반환합니다."""
+    try:
+        coin = market.replace('KRW-', '').lower()
+        models_dir = 'models'
+        models_list = []
+        if os.path.exists(models_dir):
+            for fname in os.listdir(models_dir):
+                if not fname.startswith(f'lstm_{coin}'):
+                    continue
+                is_best = '_best' in fname
+                is_latest = fname == f'lstm_{coin}.pt'
+                epoch = None
+                m = re.search(r'_epoch(\d+)', fname)
+                if m:
+                    try:
+                        epoch = int(m.group(1))
+                    except Exception:
+                        epoch = None
+                models_list.append({'file': fname, 'epoch': epoch, 'is_best': is_best, 'is_latest': is_latest})
+        models_list.sort(key=lambda x: (x['epoch'] if x['epoch'] else 0), reverse=True)
+        return {"success": True, "data": models_list}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post('/api/lstm/load')
+async def api_lstm_load(payload: dict):
+    """지정된 모델 파일을 로드하여 메모리 내에 배치합니다."""
+    market = payload.get('market')
+    model_file = payload.get('model')
+    seq_length = int(payload.get('seq_length', 60))
+    if not market or not model_file:
+        return {"success": False, "error": "market and model parameters required"}
+    coin = market.replace('KRW-', '').lower()
+    models_dir = 'models'
+    model_path = os.path.join(models_dir, model_file)
+    # 모델 파일이 없으면 가장 최신 epoch 체크포인트를 찾아 폴백 시도
+    if not os.path.exists(model_path):
+        try:
+            # 검색 패턴: lstm_{coin}_epoch*.pt
+            candidates = []
+            if os.path.exists(models_dir):
+                for fname in os.listdir(models_dir):
+                    if fname.startswith(f"lstm_{coin}_epoch") and fname.endswith('.pt'):
+                        try:
+                            epoch_str = fname.split('_epoch')[-1].split('.pt')[0]
+                            epoch = int(epoch_str)
+                            candidates.append((epoch, fname))
+                        except Exception:
+                            continue
+            if candidates:
+                candidates.sort(key=lambda x: x[0], reverse=True)
+                fallback_fname = candidates[0][1]
+                model_file = fallback_fname
+                model_path = os.path.join(models_dir, model_file)
+                # 안내 메시지를 포함해 계속 진행
+                fallback_used_msg = f"Requested model not found; using latest epoch checkpoint: {model_file}"
+            else:
+                return {"success": False, "error": "모델 파일이 없습니다. 학습을 먼저 실행하여 모델을 생성하세요."}
+        except Exception as e:
+            return {"success": False, "error": f"모델 파일 조회 중 오류: {e}"}
+
+    if LSTMPredictor is None:
+        return {"success": False, "error": "LSTM 모듈을 사용할 수 없습니다."}
+    try:
+        predictor = LSTMPredictor(model_path=f"models/lstm_{coin}", seq_length=seq_length, device=get_device())
+        if model_file != f"lstm_{coin}.pt":
+            await asyncio.to_thread(predictor._load_checkpoint, model_path)
+        else:
+            ok = await asyncio.to_thread(predictor.load)
+            if not ok:
+                return {"success": False, "error": "모델 로드 실패"}
+        lstm_predictors[market] = predictor
+        resp = {"success": True, "message": "모델 로드 완료", "model": model_file}
+        if 'fallback_used_msg' in locals():
+            resp['warning'] = fallback_used_msg
+        return resp
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.delete('/api/lstm/models')
+async def api_lstm_delete(payload: dict):
+    """저장된 모델 파일을 삭제합니다."""
+    market = payload.get('market')
+    model_file = payload.get('model')
+    if not market or not model_file:
+        return {"success": False, "error": "market and model parameters required"}
+    path = os.path.join('models', model_file)
+    if not os.path.exists(path):
+        return {"success": False, "error": "model file not found"}
+    try:
+        # 만약 기본 파일(lstm_{coin}.pt)을 삭제하면 메모리에서 언로드
+        coin = market.replace('KRW-', '').lower()
+        base_name = f"lstm_{coin}.pt"
+        if model_file == base_name and market in lstm_predictors:
+            try:
+                del lstm_predictors[market]
+            except Exception:
+                pass
+        os.remove(path)
+        return {"success": True, "message": "모델 삭제 완료"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post('/api/lstm/predict')
+async def api_lstm_predict(payload: dict):
+    market = payload.get('market')
+    seq_length = int(payload.get('seq_length', 60))
+
+    if not market:
+        return {"success": False, "error": "market 파라미터가 필요합니다."}
+
+    df = analyzer.get_market_data(market, days=max(seq_length + 30, 120))
+    if df is None:
+        return {"success": False, "error": "데이터를 가져오지 못했습니다."}
+
+    predictor = lstm_predictors.get(market)
+    if predictor is None:
+        # 저장된 모델이 있는지 시도 로드
+        coin = market.replace('KRW-', '').lower()
+        model_path = f'models/lstm_{coin}'
+        if LSTMPredictor is None:
+            return {"success": False, "error": "LSTM 모듈을 사용할 수 없습니다."}
+        predictor = LSTMPredictor(model_path=model_path, seq_length=seq_length, device=get_device())
+        if not predictor.load():
+            return {"success": False, "error": "모델 파일이 없습니다."}
+        lstm_predictors[market] = predictor
+
+    try:
+        pred_price, change_rate, direction = await asyncio.to_thread(predictor.predict, df)
+        return {"success": True, "data": {"predicted_price": pred_price, "change_rate": change_rate, "direction": direction}}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post('/api/lstm/cancel')
+async def api_lstm_cancel(payload: dict):
+    market = payload.get('market')
+    if not market:
+        return {"success": False, "error": "market 파라미터가 필요합니다."}
+
+    predictor = lstm_predictors.get(market)
+    if predictor is None:
+        # 모델이 로드되어 있지 않더라도 작업 중인 태스크가 있으면 취소 요청
+        task = lstm_tasks.get(market)
+        if task and not task.done():
+            task.cancel()
+            lstm_statuses[market] = {"status": "cancel_requested", "message": "취소 요청됨"}
+            return {"success": True, "message": "취소 요청되었습니다."}
+        return {"success": False, "error": "해당 마켓으로 진행중인 학습이 없습니다."}
+
+    # 요청된 모델이 있을 경우 요청으로 중단시키기
+    try:
+        if hasattr(predictor, 'request_stop'):
+            predictor.request_stop()
+            lstm_statuses[market] = {"status": "cancel_requested", "message": "취소 요청됨"}
+            return {"success": True, "message": "취소 요청되었습니다."}
+        else:
+            return {"success": False, "error": "이 모델은 중단을 지원하지 않습니다."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get('/api/lstm/stream')
+async def api_lstm_stream(market: str):
+    """Server-Sent Events로 로그/상태 스트리밍 제공"""
+    async def event_generator():
+        last_index = 0
+        while True:
+            st = lstm_statuses.get(market, {})
+            logs = st.get('logs', [])
+
+            # 새로운 로그 전송
+            if last_index < len(logs):
+                for msg in logs[last_index:]:
+                    payload = json.dumps({'type': 'log', 'message': msg, 'status': st.get('status')})
+                    yield f"data: {payload}\n\n"
+                last_index = len(logs)
+
+            # 상태 전송
+            payload = json.dumps({'type': 'status', 'status': st.get('status'), 'message': st.get('message'), 'resource': st.get('resource')})
+            yield f"data: {payload}\n\n"
+
+            # 종료 조건
+            if st.get('status') in ('done', 'error', 'cancelled') and last_index >= len(logs):
+                break
+
+            await asyncio.sleep(1)
+
+    return StreamingResponse(event_generator(), media_type='text/event-stream')
+
+
+# ========== LSTM 단타 자동매매 API ==========
+
+class LSTMScalpingStartRequest(BaseModel):
+    """LSTM 단타 시작 요청"""
+    markets: List[str] = []
+    trade_amount: float = 50000
+    max_positions: int = 5
+    trading_interval: int = 30
+    lstm_weight: float = 0.6
+    use_dynamic_stops: bool = True
+    crash_detection: bool = True
+    base_profit_percent: float = 0.5
+    base_loss_percent: float = 0.3
+    use_unified_model: bool = False  # 통합 LSTM 모델 사용 여부
+    auto_discover: bool = False  # 자동 코인 탐색 모드
+    top_coin_count: int = 10  # 자동 탐색 시 모니터링할 상위 코인 수
+    scan_interval: int = 300  # 자동 탐색 간격 (초)
+
+
+class UnifiedPredictorWrapper:
+    """통합 LSTM 모델을 개별 predictor 인터페이스로 감싸는 래퍼 클래스"""
+    def __init__(self, unified_pred, market: str):
+        self.unified_predictor = unified_pred
+        self.market = market
+
+    def predict(self, df):
+        """
+        LSTMScalpingSignal이 기대하는 인터페이스로 예측 수행
+        Returns: (predicted_price, change_rate, direction)
+        """
+        try:
+            # 통합 모델의 predict는 DataFrame을 받음
+            result = self.unified_predictor.predict(df)
+            if result and result.get('success'):
+                return (
+                    result.get('predicted_price', df['close'].iloc[-1]),
+                    result.get('predicted_change_rate', 0),
+                    (result.get('direction_en') or 'NEUTRAL').lower()  # UP/DOWN/NEUTRAL -> up/down/neutral
+                )
+        except Exception as e:
+            print(f"[UnifiedWrapper] {self.market} 예측 오류: {e}")
+
+        # 예측 실패 시 기본값 반환
+        return (df['close'].iloc[-1] if len(df) > 0 else 0, 0, 'neutral')
+
+
+class AutoDiscoverPredictorDict(dict):
+    """자동 탐색 모드용 동적 predictor 딕셔너리
+
+    어떤 마켓에 대해서도 동적으로 UnifiedPredictorWrapper를 생성하여 반환
+    """
+    def __init__(self, unified_predictor):
+        super().__init__()
+        self.unified_predictor = unified_predictor
+        self._cache = {}
+
+    def get(self, market, default=None):
+        """마켓에 대한 predictor 반환 (없으면 동적 생성)"""
+        if market not in self._cache:
+            self._cache[market] = UnifiedPredictorWrapper(self.unified_predictor, market)
+        return self._cache[market]
+
+    def __getitem__(self, market):
+        return self.get(market)
+
+    def __contains__(self, market):
+        # 모든 마켓에 대해 predictor 제공 가능
+        return True
+
+    def keys(self):
+        return self._cache.keys()
+
+    def values(self):
+        return self._cache.values()
+
+    def items(self):
+        return self._cache.items()
+
+
+@app.post("/api/lstm-scalping/start")
+async def start_lstm_scalping(req: LSTMScalpingStartRequest):
+    """LSTM 단타 자동매매 시작"""
+    global lstm_scalping_bot, lstm_scalping_task, lstm_scalping_status
+
+    if not LSTM_SCALPING_AVAILABLE:
+        return {"success": False, "error": "LSTM 단타 봇 모듈이 로드되지 않았습니다."}
+
+    if lstm_scalping_status["is_running"]:
+        return {"success": False, "error": "이미 LSTM 단타 자동매매가 실행 중입니다."}
+
+    # API 키 확인
+    if not UPBIT_ACCESS_KEY or not UPBIT_SECRET_KEY:
+        return {"success": False, "error": "API 키가 설정되지 않았습니다. .env 파일을 확인하세요."}
+
+    # 마켓 확인 (자동 탐색 모드가 아닌 경우에만 필수)
+    if not req.markets and not req.auto_discover:
+        return {"success": False, "error": "거래할 코인을 선택하거나 자동 탐색 모드를 활성화해주세요."}
+
+    loaded_predictors = {}
+    use_unified = req.use_unified_model or req.auto_discover  # 자동 탐색은 통합 모델 필수
+
+    # 통합 LSTM 모델 사용
+    if use_unified:
+        if not UNIFIED_LSTM_AVAILABLE or unified_predictor is None:
+            return {"success": False, "error": "통합 LSTM 모델이 로드되지 않았습니다."}
+
+        # 통합 모델 로드 확인
+        if not unified_predictor.load_model():
+            return {"success": False, "error": "통합 LSTM 모델 로드에 실패했습니다. 먼저 모델을 학습해주세요."}
+
+        if req.auto_discover:
+            print(f"[LSTM-SCALPING] 자동 탐색 모드 (통합 모델)")
+            # 자동 탐색 모드: 동적으로 마켓에 대한 래퍼 생성 가능하도록 설정
+            # 초기에는 빈 상태로 시작, 봇이 자동으로 마켓 탐색
+        else:
+            print(f"[LSTM-SCALPING] 통합 모델 사용: {req.markets}")
+
+        # 선택된 마켓에 대해 통합 모델 래퍼 생성
+        for market in req.markets:
+            loaded_predictors[market] = UnifiedPredictorWrapper(unified_predictor, market)
+
+    # 개별 LSTM 모델 사용
+    else:
+        for market in req.markets:
+            coin = market.replace('KRW-', '').lower()
+            model_path = f'models/lstm_{coin}'
+
+            # 이미 로드된 예측기 확인
+            if market in lstm_predictors and lstm_predictors[market] is not None:
+                loaded_predictors[market] = lstm_predictors[market]
+            else:
+                # 모델 파일 존재 확인
+                if os.path.exists(f'{model_path}_best.pt') or os.path.exists(f'{model_path}.pt'):
+                    try:
+                        predictor_obj = LSTMPredictor(model_path=model_path)
+                        if predictor_obj.load():
+                            loaded_predictors[market] = predictor_obj
+                            lstm_predictors[market] = predictor_obj
+                        else:
+                            print(f"[LSTM-SCALPING] {market} 모델 로드 실패")
+                    except Exception as e:
+                        print(f"[LSTM-SCALPING] {market} 모델 로드 오류: {e}")
+                else:
+                    print(f"[LSTM-SCALPING] {market} 모델 파일 없음")
+
+    # 자동 탐색 모드에서는 predictor 없이도 시작 가능
+    if not loaded_predictors and not req.auto_discover:
+        if use_unified:
+            return {"success": False, "error": "통합 모델로 예측기를 생성할 수 없습니다."}
+        return {"success": False, "error": "로드된 LSTM 모델이 없습니다. 먼저 모델을 학습해주세요."}
+
+    # 실제 거래 클라이언트 생성
+    trading_client = UpbitClient(UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY)
+
+    # 설정 생성
+    config = LSTMScalpingConfig(
+        trade_amount=req.trade_amount,
+        max_positions=req.max_positions,
+        lstm_weight=req.lstm_weight,
+        technical_weight=1.0 - req.lstm_weight,
+        use_dynamic_stops=req.use_dynamic_stops,
+        crash_detection_enabled=req.crash_detection,
+        base_profit_percent=req.base_profit_percent,
+        base_loss_percent=req.base_loss_percent
+    )
+
+    # 봇 생성
+    lstm_scalping_bot = LSTMScalpingBot(
+        client=trading_client,
+        lstm_predictors=loaded_predictors,
+        config=config
+    )
+
+    # 자동 탐색 모드 설정
+    if req.auto_discover:
+        lstm_scalping_bot.auto_discover = True
+        lstm_scalping_bot.top_coin_count = req.top_coin_count
+        lstm_scalping_bot.scan_interval = req.scan_interval
+        # 자동 탐색용 동적 predictor 생성 함수 설정
+        lstm_scalping_bot.lstm_predictors = AutoDiscoverPredictorDict(unified_predictor)
+
+    # 콜백 설정
+    lstm_scalping_bot.on_trade_callback = broadcast_lstm_scalping_trade
+    lstm_scalping_bot.on_status_update_callback = broadcast_lstm_scalping_status
+    lstm_scalping_bot.on_signal_callback = broadcast_lstm_scalping_signal  # 신호 콜백 추가
+
+    # 상태 업데이트
+    lstm_scalping_status["is_running"] = True
+    lstm_scalping_status["markets"] = list(loaded_predictors.keys()) if not req.auto_discover else []
+    lstm_scalping_status["start_time"] = datetime.now().isoformat()
+    lstm_scalping_status["use_unified_model"] = use_unified
+    lstm_scalping_status["auto_discover"] = req.auto_discover
+    lstm_scalping_status["signal_log"] = []  # 신호 로그 초기화
+    lstm_scalping_status["config"] = {
+        "trade_amount": req.trade_amount,
+        "max_positions": req.max_positions,
+        "lstm_weight": req.lstm_weight,
+        "crash_detection": req.crash_detection,
+        "dynamic_stops": req.use_dynamic_stops,
+        "use_unified_model": use_unified,
+        "auto_discover": req.auto_discover,
+        "top_coin_count": req.top_coin_count
+    }
+
+    # 비동기 루프 시작
+    lstm_scalping_task = asyncio.create_task(
+        lstm_scalping_bot.run_loop(
+            markets=list(loaded_predictors.keys()),
+            interval=req.trading_interval
+        )
+    )
+
+    # Task 완료 감시 시작
+    asyncio.create_task(monitor_lstm_scalping_task())
+
+    if req.auto_discover:
+        return {
+            "success": True,
+            "message": f"LSTM 단타 자동매매 시작 (자동 탐색 모드, 상위 {req.top_coin_count}개 코인)",
+            "markets": [],
+            "auto_discover": True,
+            "use_unified_model": True
+        }
+
+    model_type = "통합 모델" if use_unified else "개별 모델"
+    return {
+        "success": True,
+        "message": f"LSTM 단타 자동매매 시작 ({model_type}, {len(loaded_predictors)}개 코인)",
+        "markets": list(loaded_predictors.keys()),
+        "use_unified_model": use_unified
+    }
+
+
+@app.post("/api/lstm-scalping/stop")
+async def stop_lstm_scalping():
+    """LSTM 단타 자동매매 중지"""
+    global lstm_scalping_bot, lstm_scalping_task, lstm_scalping_status
+
+    if not lstm_scalping_status["is_running"]:
+        return {"success": False, "error": "실행 중인 LSTM 단타 자동매매가 없습니다."}
+
+    if lstm_scalping_bot:
+        lstm_scalping_bot.stop()
+
+    if lstm_scalping_task:
+        lstm_scalping_task.cancel()
+        try:
+            await lstm_scalping_task
+        except asyncio.CancelledError:
+            pass
+
+    lstm_scalping_status["is_running"] = False
+
+    return {"success": True, "message": "LSTM 단타 자동매매가 중지되었습니다."}
+
+
+@app.get("/api/lstm-scalping/status")
+async def get_lstm_scalping_status():
+    """LSTM 단타 자동매매 상태 조회"""
+    global lstm_scalping_bot, lstm_scalping_status, lstm_scalping_task
+
+    # Task 실제 상태 확인 (완료되었으면 is_running을 False로)
+    if lstm_scalping_task and lstm_scalping_task.done():
+        lstm_scalping_status["is_running"] = False
+
+    if lstm_scalping_bot and lstm_scalping_status["is_running"]:
+        bot_status = lstm_scalping_bot.get_status()
+        lstm_scalping_status["positions"] = bot_status.get("positions", {})
+        lstm_scalping_status["stats"] = bot_status.get("stats", {})
+        lstm_scalping_status["trade_history"] = lstm_scalping_bot.trade_history[-50:]
+
+    return lstm_scalping_status
+
+
+@app.post("/api/lstm-scalping/emergency-sell")
+async def emergency_sell_all_positions():
+    """긴급 전체 매도"""
+    global lstm_scalping_bot
+
+    if not lstm_scalping_bot or not lstm_scalping_status["is_running"]:
+        return {"success": False, "error": "실행 중인 LSTM 단타 자동매매가 없습니다."}
+
+    try:
+        results = await lstm_scalping_bot.emergency_sell_all()
+        return {
+            "success": True,
+            "message": f"{len(results)}개 포지션 긴급 매도 완료",
+            "results": results
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/lstm-scalping/positions")
+async def get_lstm_scalping_positions():
+    """현재 포지션 조회"""
+    global lstm_scalping_bot
+
+    if not lstm_scalping_bot:
+        return {"success": True, "data": {}}
+
+    return {"success": True, "data": lstm_scalping_bot.get_status().get("positions", {})}
+
+
+@app.get("/api/lstm-scalping/history")
+async def get_lstm_scalping_history(limit: int = 50):
+    """거래 내역 조회"""
+    global lstm_scalping_bot
+
+    if not lstm_scalping_bot:
+        return {"success": True, "data": []}
+
+    history = lstm_scalping_bot.trade_history[-limit:] if lstm_scalping_bot.trade_history else []
+    return {"success": True, "data": history}
+
+
+@app.get("/api/lstm-scalping/trained-models")
+async def get_trained_lstm_models():
+    """학습된 LSTM 모델 목록 조회"""
+    models = []
+    models_dir = "models"
+
+    if os.path.exists(models_dir):
+        for filename in os.listdir(models_dir):
+            if filename.startswith("lstm_") and filename.endswith("_best.pt"):
+                coin = filename.replace("lstm_", "").replace("_best.pt", "").upper()
+                market = f"KRW-{coin}"
+                models.append({
+                    "market": market,
+                    "coin": coin,
+                    "filename": filename,
+                    "path": os.path.join(models_dir, filename)
+                })
+
+    return {"success": True, "data": models}
+
+
+@app.websocket("/ws/lstm-scalping")
+async def websocket_lstm_scalping(websocket: WebSocket):
+    """LSTM 단타 실시간 상태 WebSocket"""
+    await websocket.accept()
+    lstm_scalping_ws_clients.append(websocket)
+
+    try:
+        while True:
+            # 상태 전송
+            if lstm_scalping_bot and lstm_scalping_status["is_running"]:
+                status = lstm_scalping_bot.get_status()
+                await websocket.send_json({
+                    "type": "status_update",
+                    "data": {
+                        "is_running": lstm_scalping_status["is_running"],
+                        "positions": status.get("positions", {}),
+                        "stats": status.get("stats", {}),
+                        "markets": lstm_scalping_status.get("markets", []),
+                        "signal_log": lstm_scalping_status.get("signal_log", [])[-20:]
+                    }
+                })
+
+            await asyncio.sleep(2)
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[WS] LSTM 단타 WebSocket 오류: {e}")
+    finally:
+        if websocket in lstm_scalping_ws_clients:
+            lstm_scalping_ws_clients.remove(websocket)
+
+
+async def broadcast_lstm_scalping_trade(trade_data: Dict):
+    """거래 발생 시 모든 WebSocket 클라이언트에 전송"""
+    message = {"type": "trade", "data": trade_data}
+    for ws in lstm_scalping_ws_clients[:]:
+        try:
+            await ws.send_json(message)
+        except Exception:
+            if ws in lstm_scalping_ws_clients:
+                lstm_scalping_ws_clients.remove(ws)
+
+
+async def broadcast_lstm_scalping_status(status_data: Dict):
+    """상태 업데이트 시 모든 WebSocket 클라이언트에 전송"""
+    global lstm_scalping_status
+    lstm_scalping_status["positions"] = status_data.get("positions", {})
+    lstm_scalping_status["stats"] = status_data.get("stats", {})
+
+    message = {"type": "status_update", "data": lstm_scalping_status}
+    for ws in lstm_scalping_ws_clients[:]:
+        try:
+            await ws.send_json(message)
+        except Exception:
+            if ws in lstm_scalping_ws_clients:
+                lstm_scalping_ws_clients.remove(ws)
+
+
+async def broadcast_lstm_scalping_signal(signal_data: Dict):
+    """신호 발생 시 로그 추가 및 WebSocket 전송"""
+    global lstm_scalping_status
+
+    # 로그에 추가 (최대 100개 유지)
+    lstm_scalping_status["signal_log"].append({
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "market": signal_data.get("market") or "UNKNOWN",
+        "signal": signal_data.get("signal") or "UNKNOWN",
+        "confidence": signal_data.get("confidence", 0),
+        "reason": signal_data.get("reason", "")
+    })
+
+    # 최신 100개만 유지
+    if len(lstm_scalping_status["signal_log"]) > 100:
+        lstm_scalping_status["signal_log"] = lstm_scalping_status["signal_log"][-100:]
+
+    # WebSocket 전송
+    message = {"type": "signal", "data": signal_data}
+    for ws in lstm_scalping_ws_clients[:]:
+        try:
+            await ws.send_json(message)
+        except Exception:
+            if ws in lstm_scalping_ws_clients:
+                lstm_scalping_ws_clients.remove(ws)
+
+
+async def monitor_lstm_scalping_task():
+    """Task 완료 감시 및 상태 동기화"""
+    global lstm_scalping_task, lstm_scalping_status
+    try:
+        if lstm_scalping_task:
+            await lstm_scalping_task
+    except asyncio.CancelledError:
+        print("[LSTM-SCALPING] Task가 취소되었습니다")
+    except Exception as e:
+        print(f"[LSTM-SCALPING] Task 오류: {e}")
+    finally:
+        lstm_scalping_status["is_running"] = False
+        print("[LSTM-SCALPING] Task 완료, 상태를 is_running=False로 변경")
+        # WebSocket으로 클라이언트에 알림
+        try:
+            await broadcast_lstm_scalping_status(lstm_scalping_status)
+        except Exception as e:
+            print(f"[LSTM-SCALPING] 상태 브로드캐스트 오류: {e}")
+
+
+# ========== 통합 LSTM 모델 API ==========
+
+# 통합 모델 학습 상태
+unified_lstm_training_status = {
+    "is_training": False,
+    "progress": 0,
+    "total_epochs": 0,
+    "current_epoch": 0,
+    "loss": 0,
+    "accuracy": 0,
+    "message": ""
+}
+
+
+@app.post("/api/unified-lstm/train")
+async def train_unified_lstm(request: Request):
+    """통합 LSTM 모델 학습 (여러 코인 데이터로 하나의 모델)"""
+    global unified_lstm_training_status
+
+    if not UNIFIED_LSTM_AVAILABLE:
+        return JSONResponse({"success": False, "error": "통합 LSTM 모듈이 로드되지 않았습니다"}, status_code=500)
+
+    if unified_predictor.is_training:
+        return JSONResponse({"success": False, "error": "이미 학습 중입니다"}, status_code=400)
+
+    try:
+        data = await request.json()
+        markets = data.get("markets", [])
+        epochs = data.get("epochs", 100)
+        min_coins = data.get("min_coins", 5)
+
+        if len(markets) < min_coins:
+            return {"success": False, "error": f"최소 {min_coins}개 코인이 필요합니다"}
+
+        # 데이터 수집
+        all_data = {}
+        unified_lstm_training_status["message"] = "데이터 수집 중..."
+
+        for market in markets:
+            candles = client.get_candles_minute(market, unit=1, count=200)
+            if candles and len(candles) >= 100:
+                # DataFrame으로 변환
+                df = pd.DataFrame(candles)
+                # 컬럼명 통일
+                df = df.rename(columns={
+                    'opening_price': 'open',
+                    'high_price': 'high',
+                    'low_price': 'low',
+                    'trade_price': 'close',
+                    'candle_acc_trade_volume': 'volume'
+                })
+                # 시간순 정렬 (오래된 데이터가 먼저)
+                df = df.sort_values('candle_date_time_kst').reset_index(drop=True)
+                all_data[market] = df
+
+        if len(all_data) < min_coins:
+            return {"success": False, "error": f"충분한 데이터가 있는 코인이 {min_coins}개 미만입니다"}
+
+        # 비동기 학습 시작
+        unified_lstm_training_status["is_training"] = True
+        unified_lstm_training_status["total_epochs"] = epochs
+
+        async def training_callback(progress):
+            unified_lstm_training_status["current_epoch"] = progress["epoch"]
+            unified_lstm_training_status["loss"] = progress["train_loss"]
+            unified_lstm_training_status["accuracy"] = progress["val_accuracy"]
+            unified_lstm_training_status["message"] = f"학습 중... {progress['epoch']}/{progress['total_epochs']}"
+
+        # 백그라운드 학습
+        asyncio.create_task(_run_unified_training(all_data, epochs, training_callback))
+
+        return {
+            "success": True,
+            "message": f"{len(all_data)}개 코인 데이터로 학습을 시작합니다",
+            "num_coins": len(all_data)
+        }
+
+    except Exception as e:
+        unified_lstm_training_status["is_training"] = False
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+async def _run_unified_training(all_data: Dict, epochs: int, callback):
+    """백그라운드에서 통합 모델 학습"""
+    global unified_lstm_training_status
+
+    try:
+        result = await unified_predictor.train(all_data, epochs=epochs, callback=callback)
+
+        if result["success"]:
+            unified_lstm_training_status["message"] = f"학습 완료! 정확도: {result['final_accuracy']:.2%}"
+        else:
+            unified_lstm_training_status["message"] = f"학습 실패: {result.get('error', '알 수 없는 오류')}"
+
+    except Exception as e:
+        unified_lstm_training_status["message"] = f"학습 오류: {str(e)}"
+    finally:
+        unified_lstm_training_status["is_training"] = False
+
+
+@app.get("/api/unified-lstm/status")
+async def get_unified_lstm_status():
+    """통합 LSTM 학습 상태 조회"""
+    if not UNIFIED_LSTM_AVAILABLE:
+        return {"available": False, "error": "통합 LSTM 모듈이 로드되지 않았습니다"}
+
+    # 모델 파일 확인
+    model_exists = os.path.exists("models/unified_lstm_latest.pt")
+
+    return {
+        "available": True,
+        "model_loaded": unified_predictor.model is not None,
+        "model_exists": model_exists,
+        "is_training": unified_lstm_training_status["is_training"],
+        "current_epoch": unified_lstm_training_status["current_epoch"],
+        "total_epochs": unified_lstm_training_status["total_epochs"],
+        "loss": unified_lstm_training_status["loss"],
+        "accuracy": unified_lstm_training_status["accuracy"],
+        "message": unified_lstm_training_status["message"]
+    }
+
+
+@app.post("/api/unified-lstm/predict")
+async def predict_unified_lstm(request: Request):
+    """통합 모델로 예측"""
+    if not UNIFIED_LSTM_AVAILABLE:
+        return JSONResponse({"success": False, "error": "통합 LSTM 모듈이 로드되지 않았습니다"}, status_code=500)
+
+    try:
+        data = await request.json()
+        market = data.get("market", "KRW-BTC")
+
+        # 데이터 가져오기
+        candles = client.get_candles_minute(market, unit=1, count=100)
+        if not candles or len(candles) < 60:
+            return {"success": False, "error": "데이터를 가져올 수 없습니다"}
+
+        # DataFrame으로 변환
+        df = pd.DataFrame(candles)
+        df = df.rename(columns={
+            'opening_price': 'open',
+            'high_price': 'high',
+            'low_price': 'low',
+            'trade_price': 'close',
+            'candle_acc_trade_volume': 'volume'
+        })
+        df = df.sort_values('candle_date_time_kst').reset_index(drop=True)
+
+        # 예측
+        result = unified_predictor.predict(df)
+
+        if result["success"]:
+            # numpy 타입을 Python 기본 타입으로 변환
+            return {
+                "success": True,
+                "market": market,
+                "direction": result["direction"],
+                "direction_en": result["direction_en"],
+                "predicted_change_rate": float(result["predicted_change_rate"]),
+                "current_price": float(result["current_price"]),
+                "predicted_price": float(result["predicted_price"]),
+                "confidence": float(result["confidence"]),
+                "probabilities": {k: float(v) for k, v in result["probabilities"].items()}
+            }
+        else:
+            return result
+
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/unified-lstm/load")
+async def load_unified_lstm_model():
+    """통합 모델 로드"""
+    if not UNIFIED_LSTM_AVAILABLE:
+        return JSONResponse({"success": False, "error": "통합 LSTM 모듈이 로드되지 않았습니다"}, status_code=500)
+
+    try:
+        success = unified_predictor.load_model()
+        if success:
+            return {"success": True, "message": "모델이 로드되었습니다"}
+        else:
+            return {"success": False, "error": "모델 파일을 찾을 수 없습니다"}
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+# ========== 모델 파일 관리 API ==========
+
+@app.get("/api/models/list")
+async def list_all_models():
+    """모든 모델 파일 목록 조회"""
+    try:
+        models_dir = "models"
+        if not os.path.exists(models_dir):
+            return {"success": True, "models": [], "total_size": 0}
+
+        models = []
+        total_size = 0
+
+        for filename in os.listdir(models_dir):
+            if filename.endswith('.pt'):
+                filepath = os.path.join(models_dir, filename)
+                stat = os.stat(filepath)
+                size_mb = stat.st_size / (1024 * 1024)
+                total_size += stat.st_size
+
+                # 모델 타입 분류
+                if filename.startswith('unified_lstm'):
+                    model_type = 'unified'
+                elif 'epoch' in filename.lower():
+                    model_type = 'checkpoint'
+                elif 'best' in filename.lower():
+                    model_type = 'best'
+                else:
+                    model_type = 'individual'
+
+                # 코인 이름 추출
+                coin = None
+                if model_type == 'individual':
+                    parts = filename.replace('.pt', '').split('_')
+                    if len(parts) >= 2:
+                        coin = parts[1] if parts[0] == 'lstm' else parts[0]
+
+                models.append({
+                    "filename": filename,
+                    "filepath": filepath,
+                    "size_mb": round(size_mb, 2),
+                    "size_bytes": stat.st_size,
+                    "created": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "model_type": model_type,
+                    "coin": coin
+                })
+
+        # 수정 시간 기준 정렬 (최신순)
+        models.sort(key=lambda x: x['modified'], reverse=True)
+
+        return {
+            "success": True,
+            "models": models,
+            "total_count": len(models),
+            "total_size_mb": round(total_size / (1024 * 1024), 2)
+        }
+
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/models/delete")
+async def delete_model(request: Request):
+    """모델 파일 삭제"""
+    try:
+        data = await request.json()
+        filename = data.get("filename")
+
+        if not filename:
+            return {"success": False, "error": "파일명이 필요합니다"}
+
+        # 보안: 경로 탐색 방지
+        if '..' in filename or '/' in filename or '\\' in filename:
+            return {"success": False, "error": "잘못된 파일명입니다"}
+
+        filepath = os.path.join("models", filename)
+
+        if not os.path.exists(filepath):
+            return {"success": False, "error": "파일을 찾을 수 없습니다"}
+
+        os.remove(filepath)
+        return {"success": True, "message": f"{filename} 삭제 완료"}
+
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/models/delete-bulk")
+async def delete_models_bulk(request: Request):
+    """여러 모델 파일 일괄 삭제"""
+    try:
+        data = await request.json()
+        filenames = data.get("filenames", [])
+
+        if not filenames:
+            return {"success": False, "error": "삭제할 파일이 없습니다"}
+
+        deleted = []
+        errors = []
+
+        for filename in filenames:
+            # 보안: 경로 탐색 방지
+            if '..' in filename or '/' in filename or '\\' in filename:
+                errors.append(f"{filename}: 잘못된 파일명")
+                continue
+
+            filepath = os.path.join("models", filename)
+
+            if not os.path.exists(filepath):
+                errors.append(f"{filename}: 파일 없음")
+                continue
+
+            try:
+                os.remove(filepath)
+                deleted.append(filename)
+            except Exception as e:
+                errors.append(f"{filename}: {str(e)}")
+
+        return {
+            "success": True,
+            "deleted": deleted,
+            "deleted_count": len(deleted),
+            "errors": errors
+        }
+
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/models/cleanup-checkpoints")
+async def cleanup_checkpoint_models():
+    """체크포인트 모델 정리 (최신 best만 남김)"""
+    try:
+        models_dir = "models"
+        if not os.path.exists(models_dir):
+            return {"success": True, "deleted": 0, "saved_space_mb": 0}
+
+        # 코인별로 그룹화
+        coin_models = {}
+        for filename in os.listdir(models_dir):
+            if not filename.endswith('.pt'):
+                continue
+
+            if 'unified' in filename:
+                continue  # 통합 모델은 제외
+
+            parts = filename.replace('.pt', '').split('_')
+            if len(parts) >= 2:
+                coin = parts[1] if parts[0] == 'lstm' else parts[0]
+                if coin not in coin_models:
+                    coin_models[coin] = []
+                coin_models[coin].append(filename)
+
+        deleted = []
+        saved_size = 0
+
+        for coin, files in coin_models.items():
+            if len(files) <= 1:
+                continue
+
+            # 최신 파일만 유지
+            files_with_time = []
+            for f in files:
+                filepath = os.path.join(models_dir, f)
+                mtime = os.path.getmtime(filepath)
+                size = os.path.getsize(filepath)
+                is_best = 'best' in f.lower()
+                files_with_time.append((f, mtime, size, is_best))
+
+            # best 파일 우선, 그 다음 최신순
+            files_with_time.sort(key=lambda x: (not x[3], -x[1]))
+
+            # 첫 번째 파일만 유지, 나머지 삭제
+            for f, _, size, _ in files_with_time[1:]:
+                if 'epoch' in f.lower():  # 체크포인트만 삭제
+                    filepath = os.path.join(models_dir, f)
+                    try:
+                        os.remove(filepath)
+                        deleted.append(f)
+                        saved_size += size
+                    except:
+                        pass
+
+        return {
+            "success": True,
+            "deleted": deleted,
+            "deleted_count": len(deleted),
+            "saved_space_mb": round(saved_size / (1024 * 1024), 2)
+        }
+
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+# ----------------------------------------------------------
 
 
 @app.get("/api/top-recommendations")
@@ -872,8 +2211,8 @@ async def websocket_realtime(websocket: WebSocket):
         pass
     finally:
         try:
-            manager.disconnect(websocket)
-        except:
+            await manager.disconnect(websocket)
+        except Exception:
             pass
 
 
@@ -932,30 +2271,25 @@ async def trading_loop():
 
     # 초기 잔고 기록
     try:
-        trading_status['start_balance'] = trading_client.get_balance('KRW')
-        trading_status['current_balance'] = trading_status['start_balance']
+        start_balance = trading_client.get_balance('KRW')
+        async with trading_status_lock:
+            trading_status['start_balance'] = start_balance
+            trading_status['current_balance'] = start_balance
     except Exception as e:
         print(f"[TRADING] 잔고 조회 실패: {e}")
 
     while trading_status['is_running']:
         try:
             # 시장 데이터 가져오기
-            df = get_market_data_for_trading(trading_status['market'], 200)
+            market = trading_status['market']
+            df = get_market_data_for_trading(market, 200)
             current_price = float(df.iloc[-1]['close'])
-            trading_status['last_price'] = current_price
 
             # 현재 잔고 조회
             krw_balance = trading_client.get_balance('KRW')
-            crypto_symbol = trading_status['market'].split('-')[1]
+            crypto_symbol = market.split('-')[1]
             crypto_balance = trading_client.get_balance(crypto_symbol)
             total_value = krw_balance + crypto_balance * current_price
-
-            trading_status['current_balance'] = total_value
-            trading_status['profit'] = total_value - trading_status['start_balance']
-            if trading_status['start_balance'] > 0:
-                trading_status['profit_rate'] = (trading_status['profit'] / trading_status['start_balance']) * 100
-            else:
-                trading_status['profit_rate'] = 0
 
             # AI 액션 결정
             action = 0  # 기본: Hold
@@ -967,19 +2301,29 @@ async def trading_loop():
                 action = int(action)
                 action_text = ['HOLD', 'BUY', 'SELL'][action]
 
-            trading_status['last_action'] = action_text
-            trading_status['last_action_time'] = datetime.now().isoformat()
+            # 상태 업데이트 (Lock 보호)
+            async with trading_status_lock:
+                trading_status['last_price'] = current_price
+                trading_status['current_balance'] = total_value
+                trading_status['profit'] = total_value - trading_status['start_balance']
+                if trading_status['start_balance'] > 0:
+                    trading_status['profit_rate'] = (trading_status['profit'] / trading_status['start_balance']) * 100
+                else:
+                    trading_status['profit_rate'] = 0
+                trading_status['last_action'] = action_text
+                trading_status['last_action_time'] = datetime.now().isoformat()
 
             # 액션 실행
+            current_position = trading_status['current_position']
+            max_trade_amount = trading_status['max_trade_amount']
+
             if action == 1:  # Buy
-                if trading_status['current_position'] is None and krw_balance > 5000:
-                    trade_amount = min(krw_balance * 0.5, trading_status['max_trade_amount'])
+                if current_position is None and krw_balance > 5000:
+                    trade_amount = min(krw_balance * 0.5, max_trade_amount)
                     if trade_amount >= 5000:
                         try:
-                            result = trading_client.buy_market_order(trading_status['market'], trade_amount)
+                            result = trading_client.buy_market_order(market, trade_amount)
                             if 'error' not in result:
-                                trading_status['current_position'] = 'long'
-                                trading_status['trade_count'] += 1
                                 trade_record = {
                                     'time': datetime.now().isoformat(),
                                     'action': 'BUY',
@@ -987,7 +2331,10 @@ async def trading_loop():
                                     'amount': trade_amount,
                                     'uuid': result.get('uuid', 'N/A')
                                 }
-                                trading_status['trade_history'].append(trade_record)
+                                async with trading_status_lock:
+                                    trading_status['current_position'] = 'long'
+                                    trading_status['trade_count'] += 1
+                                    trading_status['trade_history'].append(trade_record)
                                 print(f"[TRADING] 매수 체결: {trade_amount:,.0f} KRW @ {current_price:,.0f}")
 
                                 # WebSocket으로 브로드캐스트
@@ -999,12 +2346,10 @@ async def trading_loop():
                             print(f"[TRADING] 매수 오류: {e}")
 
             elif action == 2:  # Sell
-                if trading_status['current_position'] == 'long' and crypto_balance > 0:
+                if current_position == 'long' and crypto_balance > 0:
                     try:
-                        result = trading_client.sell_market_order(trading_status['market'], crypto_balance)
+                        result = trading_client.sell_market_order(market, crypto_balance)
                         if 'error' not in result:
-                            trading_status['current_position'] = None
-                            trading_status['trade_count'] += 1
                             trade_record = {
                                 'time': datetime.now().isoformat(),
                                 'action': 'SELL',
@@ -1012,7 +2357,10 @@ async def trading_loop():
                                 'volume': crypto_balance,
                                 'uuid': result.get('uuid', 'N/A')
                             }
-                            trading_status['trade_history'].append(trade_record)
+                            async with trading_status_lock:
+                                trading_status['current_position'] = None
+                                trading_status['trade_count'] += 1
+                                trading_status['trade_history'].append(trade_record)
                             print(f"[TRADING] 매도 체결: {crypto_balance:.8f} @ {current_price:,.0f}")
 
                             # WebSocket으로 브로드캐스트
@@ -2939,6 +4287,176 @@ async def rebalance_portfolio():
             "total_investment": total_investment,
             "per_coin": per_coin,
             "coins": list(positions.keys())
+        }
+    }
+
+
+# ========== 스캘핑(단타) 모드 ==========
+scalping_status = {
+    "is_running": False,
+    "markets": [],
+    "config": {
+        "min_profit_percent": 0.15,
+        "max_loss_percent": 0.5,
+        "target_profit_percent": 0.3,
+        "trade_amount": 50000,
+        "max_positions": 3,
+        "cooldown_seconds": 30
+    },
+    "stats": {
+        "total_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "total_profit": 0,
+        "win_rate": 0
+    },
+    "positions": {},
+    "trade_history": []
+}
+scalping_task: Optional[asyncio.Task] = None
+scalping_lock = asyncio.Lock()
+
+
+class ScalpingStartRequest(BaseModel):
+    markets: List[str] = ["KRW-BTC"]
+    trade_amount: float = 50000
+    target_profit_percent: float = 0.3
+    max_loss_percent: float = 0.5
+    max_positions: int = 3
+
+
+async def scalping_loop():
+    """스캘핑 메인 루프"""
+    global scalping_status, trading_client
+
+    print("[SCALPING] 스캘핑 모드 시작")
+
+    from src.bot.scalping_bot import ScalpingBot, ScalpingConfig
+
+    config = ScalpingConfig(
+        min_profit_percent=scalping_status['config']['min_profit_percent'],
+        max_loss_percent=scalping_status['config']['max_loss_percent'],
+        target_profit_percent=scalping_status['config']['target_profit_percent'],
+        trade_amount=scalping_status['config']['trade_amount'],
+        max_positions=scalping_status['config']['max_positions'],
+        cooldown_seconds=scalping_status['config']['cooldown_seconds']
+    )
+
+    bot = ScalpingBot(trading_client, config)
+
+    while scalping_status['is_running']:
+        try:
+            markets = scalping_status['markets']
+
+            for market in markets:
+                if not scalping_status['is_running']:
+                    break
+
+                result = bot.run_single_check(market)
+
+                if result:
+                    async with scalping_lock:
+                        scalping_status['trade_history'].append(result)
+                        scalping_status['positions'] = {
+                            m: {
+                                'entry_price': p['entry_price'],
+                                'entry_time': p['entry_time'].isoformat(),
+                                'amount': p['amount']
+                            }
+                            for m, p in bot.positions.items()
+                        }
+
+                    # WebSocket 브로드캐스트
+                    await manager.broadcast({
+                        'type': 'scalping_trade',
+                        'data': result
+                    })
+
+                    print(f"[SCALPING] {result.get('action', 'TRADE')} - {market}")
+
+                await asyncio.sleep(1)  # 빠른 체크
+
+            # 통계 업데이트
+            stats = bot.get_stats()
+            async with scalping_lock:
+                scalping_status['stats'] = stats
+
+            # 5초 대기 후 다음 사이클
+            await asyncio.sleep(5)
+
+        except Exception as e:
+            print(f"[SCALPING] 루프 오류: {e}")
+            await asyncio.sleep(5)
+
+    print("[SCALPING] 스캘핑 모드 종료")
+
+
+@app.post("/api/scalping/start")
+async def start_scalping(request: ScalpingStartRequest):
+    """스캘핑 모드 시작"""
+    global scalping_status, scalping_task, trading_client
+
+    if not trading_client:
+        return {"success": False, "error": "API 키가 설정되지 않았습니다."}
+
+    async with scalping_lock:
+        if scalping_status['is_running']:
+            return {"success": False, "error": "이미 실행 중입니다."}
+
+        scalping_status['is_running'] = True
+        scalping_status['markets'] = request.markets
+        scalping_status['config']['trade_amount'] = request.trade_amount
+        scalping_status['config']['target_profit_percent'] = request.target_profit_percent
+        scalping_status['config']['max_loss_percent'] = request.max_loss_percent
+        scalping_status['config']['max_positions'] = request.max_positions
+        scalping_status['trade_history'] = []
+        scalping_status['positions'] = {}
+
+    scalping_task = asyncio.create_task(scalping_loop())
+
+    return {
+        "success": True,
+        "message": f"스캘핑 모드 시작 - {len(request.markets)}개 마켓",
+        "data": {
+            "markets": request.markets,
+            "config": scalping_status['config']
+        }
+    }
+
+
+@app.post("/api/scalping/stop")
+async def stop_scalping():
+    """스캘핑 모드 중지"""
+    global scalping_status, scalping_task
+
+    async with scalping_lock:
+        if not scalping_status['is_running']:
+            return {"success": False, "error": "실행 중이 아닙니다."}
+
+        scalping_status['is_running'] = False
+
+    if scalping_task:
+        scalping_task.cancel()
+
+    return {
+        "success": True,
+        "message": "스캘핑 모드 중지",
+        "stats": scalping_status['stats']
+    }
+
+
+@app.get("/api/scalping/status")
+async def get_scalping_status():
+    """스캘핑 상태 조회"""
+    return {
+        "success": True,
+        "data": {
+            "is_running": scalping_status['is_running'],
+            "markets": scalping_status['markets'],
+            "config": scalping_status['config'],
+            "stats": scalping_status['stats'],
+            "positions": scalping_status['positions'],
+            "recent_trades": scalping_status['trade_history'][-20:]
         }
     }
 

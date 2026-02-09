@@ -1,20 +1,136 @@
 {
   "is_running": true,
   "total_investment": 50000.0,
-  "coin_count": 0,
+  "coin_count": 3,
   "analysis_mode": "volume_top50",
-  "coin_category": "meme",
+  "coin_category": "safe",
   "trading_interval": 60,
   "allocation_mode": "weighted",
   "target_profit_percent": 10.0,
   "stop_loss_percent": 10.0,
-  "start_time": "2026-01-31T00:13:57.361978",
-  "start_balance": 99987.87356675,
-  "current_balance": 49962.8735759,
-  "profit": -50024.99999085,
-  "profit_rate": -50.03106697479096,
-  "positions": {},
-  "selected_coins": [],
+  "start_time": "2026-02-03T17:08:40.915829",
+  "start_balance": 99889.5015023,
+  "current_balance": 49865.22862968,
+  "profit": -50024.27287262,
+  "profit_rate": -50.07961008942283,
+  "positions": {
+    "KRW-ETH": {
+      "market": "KRW-ETH",
+      "name": "이더리움",
+      "allocated_amount": 21212.121212121212,
+      "allocation_percent": 42.4,
+      "entry_price": null,
+      "current_price": 3425000.0,
+      "volume": 0,
+      "unrealized_pnl": 0,
+      "realized_pnl": 0,
+      "status": "none",
+      "score": 70,
+      "recommendation": "매도",
+      "trade_prices": {
+        "buy_price": 3425000.0,
+        "sell_price": 3596250.0,
+        "stop_loss": 3253750.0,
+        "expected_profit_rate": 5.0,
+        "risk_rate": 5.0
+      },
+      "last_action": "HOLD",
+      "trade_history": [],
+      "pending_order": {
+        "uuid": "21a7ba8c-8842-4687-a238-cb6404ecd042",
+        "price": 3425000.0,
+        "volume": 0.0061933200619332,
+        "amount": 21212.121212121212,
+        "created_at": "2026-02-03T17:08:45.446121"
+      }
+    },
+    "KRW-BTC": {
+      "market": "KRW-BTC",
+      "name": "비트코인",
+      "allocated_amount": 16666.666666666664,
+      "allocation_percent": 33.3,
+      "entry_price": null,
+      "current_price": 116050000.0,
+      "volume": 0,
+      "unrealized_pnl": 0,
+      "realized_pnl": 0,
+      "status": "none",
+      "score": 55,
+      "recommendation": "매도",
+      "trade_prices": {
+        "buy_price": 116050000.0,
+        "sell_price": 121852500.0,
+        "stop_loss": 110247500.0,
+        "expected_profit_rate": 5.0,
+        "risk_rate": 5.0
+      },
+      "last_action": "HOLD",
+      "trade_history": [],
+      "pending_order": {
+        "uuid": "f5da014d-8b6b-428f-a07e-d07bb4a8e602",
+        "price": 116050000.0,
+        "volume": 0.00014361625736033316,
+        "amount": 16666.666666666664,
+        "created_at": "2026-02-03T17:08:49.111451"
+      }
+    },
+    "KRW-SOL": {
+      "market": "KRW-SOL",
+      "name": "솔라나",
+      "allocated_amount": 12121.212121212122,
+      "allocation_percent": 24.2,
+      "entry_price": null,
+      "current_price": 154200.0,
+      "volume": 0,
+      "unrealized_pnl": 0,
+      "realized_pnl": 0,
+      "status": "none",
+      "score": 40,
+      "recommendation": "매도",
+      "trade_prices": {
+        "buy_price": 154200.0,
+        "sell_price": 161910.0,
+        "stop_loss": 146490.0,
+        "expected_profit_rate": 5.0,
+        "risk_rate": 5.0
+      },
+      "last_action": "HOLD",
+      "trade_history": [],
+      "pending_order": {
+        "uuid": "f5376a8c-ef0d-43c8-b113-787085eac888",
+        "price": 154200.0,
+        "volume": 0.07860708249813309,
+        "amount": 12121.212121212122,
+        "created_at": "2026-02-03T17:08:51.428825"
+      }
+    }
+  },
+  "selected_coins": [
+    {
+      "market": "KRW-ETH",
+      "name": "이더리움",
+      "score": 70,
+      "recommendation": "매도",
+      "allocated_amount": 21212.121212121212,
+      "allocation_percent": 42.4
+    },
+    {
+      "market": "KRW-BTC",
+      "name": "비트코인",
+      "score": 55,
+      "recommendation": "매도",
+      "allocated_amount": 16666.666666666664,
+      "allocation_percent": 33.3
+    },
+    {
+      "market": "KRW-SOL",
+      "name": "솔라나",
+      "score": 40,
+      "recommendation": "매도",
+      "allocated_amount": 12121.212121212122,
+      "allocation_percent": 24.2
+    }
+  ],
   "trade_history": [],
-  "saved_at": "2026-01-31T00:15:46.177313"
+  "saved_at": "2026-02-03T17:08:52.523415"
 }

@@ -1,32 +1,80 @@
 """
 AI 기반 종목 예측 시스템
 학습된 모델 또는 앙상블 방식으로 상승/하락 예측
-뉴스 감정 분석 신호 통합
+LSTM 가격 예측 + PPO 강화학습 + 뉴스 감정 분석 통합
 """
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
 import sys
 import os
+import threading
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from environment.trading_env import CryptoTradingEnv
 from models.rl_agent import TradingAgent
 
-# 뉴스 신호 생성기 (lazy import)
+# LSTM 예측기 (lazy import) - 스레드 안전성 보장
+_lstm_predictor = None
+_lstm_predictor_lock = threading.Lock()
+
+def get_lstm_predictor(market: str = 'KRW-BTC'):
+    """LSTM 예측기 지연 로딩 (스레드 안전)"""
+    global _lstm_predictor
+
+    # 이미 로드되었으면 락 없이 반환 (성능 최적화)
+    if _lstm_predictor is not None:
+        return _lstm_predictor
+
+    # 락을 획득하여 초기화
+    with _lstm_predictor_lock:
+        # Double-checked locking: 락 획득 후 다시 확인
+        if _lstm_predictor is None:
+            try:
+                from models.lstm_predictor import LSTMPredictor
+                coin = market.replace('KRW-', '').lower()
+                model_path = f'models/lstm_{coin}'
+                predictor = LSTMPredictor(model_path=model_path)
+                if not predictor.load():
+                    # BTC 모델로 폴백
+                    predictor = LSTMPredictor(model_path='models/lstm_btc')
+                    if not predictor.load():
+                        try:
+                            import logging
+                            logging.getLogger(__name__).debug("[LSTM] LSTM 모델을 찾을 수 없습니다.")
+                        except Exception:
+                            pass
+                        return None
+                _lstm_predictor = predictor
+            except Exception as e:
+                print(f"[WARNING] LSTM 예측기 로드 실패: {e}")
+                return None
+        return _lstm_predictor
+
+# 뉴스 신호 생성기 (lazy import) - 스레드 안전성 보장
 _news_signal_generator = None
+_news_signal_generator_lock = threading.Lock()
 
 def get_news_signal_generator():
-    """뉴스 신호 생성기 지연 로딩"""
+    """뉴스 신호 생성기 지연 로딩 (스레드 안전)"""
     global _news_signal_generator
-    if _news_signal_generator is None:
-        try:
-            from news.signal_generator import NewsSignalGenerator
-            _news_signal_generator = NewsSignalGenerator()
-        except Exception as e:
-            print(f"[WARNING] 뉴스 신호 생성기 로드 실패: {e}")
-    return _news_signal_generator
+
+    # 이미 로드되었으면 락 없이 반환
+    if _news_signal_generator is not None:
+        return _news_signal_generator
+
+    # 락을 획득하여 초기화
+    with _news_signal_generator_lock:
+        # Double-checked locking
+        if _news_signal_generator is None:
+            try:
+                from news.signal_generator import NewsSignalGenerator
+                _news_signal_generator = NewsSignalGenerator()
+            except Exception as e:
+                print(f"[WARNING] 뉴스 신호 생성기 로드 실패: {e}")
+                return None
+        return _news_signal_generator
 
 
 class AIPredictor:
@@ -169,8 +217,34 @@ class AIPredictor:
         else:
             return 0, 0.5  # Hold
 
+    def predict_with_lstm(self, df: pd.DataFrame, market: str) -> Optional[Dict]:
+        """LSTM 기반 가격 예측
+
+        Args:
+            df: OHLCV 데이터
+            market: 마켓 코드
+
+        Returns:
+            LSTM 예측 결과 또는 None
+        """
+        lstm = get_lstm_predictor(market)
+        if lstm is None:
+            return None
+
+        try:
+            pred_price, change_rate, direction = lstm.predict(df)
+            return {
+                'predicted_price': pred_price,
+                'change_rate': change_rate,
+                'direction': direction,
+                'available': True
+            }
+        except Exception as e:
+            print(f"[LSTM] 예측 실패: {e}")
+            return None
+
     def predict_market(self, df: pd.DataFrame, market: str) -> Dict:
-        """종목 예측
+        """종목 예측 (LSTM + PPO/규칙 앙상블)
 
         Args:
             df: OHLCV 데이터
@@ -179,8 +253,35 @@ class AIPredictor:
         Returns:
             예측 결과
         """
-        # AI 또는 규칙 기반 예측
+        # PPO/규칙 기반 예측
         action, confidence = self.predict_with_ai(df) if self.use_ai_model else self.predict_with_rules(df)
+
+        # LSTM 가격 예측 (보조 지표)
+        lstm_result = self.predict_with_lstm(df, market)
+
+        # LSTM 신호를 PPO/규칙 예측과 결합
+        if lstm_result and lstm_result.get('available'):
+            lstm_direction = lstm_result['direction']
+            lstm_change = lstm_result['change_rate']
+
+            # LSTM이 강한 신호를 보내면 액션 조정
+            if lstm_direction == 'STRONG_UP' and action != 1:
+                # LSTM이 강한 상승 예측이면 매수 신호 강화
+                if action == 0:  # Hold -> Buy 고려
+                    if confidence < 0.6:
+                        action = 1
+                        confidence = min(confidence + 0.2, 0.9)
+            elif lstm_direction == 'STRONG_DOWN' and action != 2:
+                # LSTM이 강한 하락 예측이면 매도 신호 강화
+                if action == 0:  # Hold -> Sell 고려
+                    if confidence < 0.6:
+                        action = 2
+                        confidence = min(confidence + 0.2, 0.9)
+
+            # LSTM과 PPO가 일치하면 신뢰도 상승
+            if (action == 1 and lstm_direction in ['UP', 'STRONG_UP']) or \
+               (action == 2 and lstm_direction in ['DOWN', 'STRONG_DOWN']):
+                confidence = min(confidence * 1.15, 0.95)
 
         # 액션 해석
         action_map = {
@@ -219,8 +320,16 @@ class AIPredictor:
             'direction': direction_map[action],
             'confidence': confidence,
             'confidence_level': confidence_level,
-            'method': 'AI 모델' if self.use_ai_model else '규칙 기반'
+            'method': 'LSTM + AI 앙상블' if lstm_result else ('AI 모델' if self.use_ai_model else '규칙 기반')
         }
+
+        # LSTM 예측 정보 추가
+        if lstm_result:
+            result['lstm_prediction'] = {
+                'predicted_price': lstm_result['predicted_price'],
+                'change_rate': lstm_result['change_rate'],
+                'direction': lstm_result['direction']
+            }
 
         return result
 

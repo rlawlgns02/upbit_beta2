@@ -180,6 +180,10 @@ class CryptoTradingEnv(gym.Env):
         Returns:
             observation, reward, terminated, truncated, info
         """
+        # 현재 스텝이 유효한지 확인
+        if self.current_step >= len(self.df):
+            raise IndexError(f"current_step ({self.current_step}) exceeds dataframe length ({len(self.df)})")
+
         current_price = self.df.iloc[self.current_step]['close']
         reward = 0.0
 
@@ -208,22 +212,30 @@ class CryptoTradingEnv(gym.Env):
                 self.crypto_held = 0.0
                 self.total_trades += 1
 
-        # 다음 스텝으로 이동
+        # 다음 스텝으로 이동하기 전에 범위 체크
         self.current_step += 1
 
-        # 다음 스텝의 가격으로 자산 계산 (정확한 보상 계산을 위해)
-        next_price = self.df.iloc[self.current_step]['close']
+        # 에피소드 종료 조건 먼저 체크
+        terminated = False
+        truncated = self.current_step >= len(self.df) - 1
+
+        # 마지막 스텝이거나 초과한 경우 현재 가격으로 평가
+        if truncated or self.current_step >= len(self.df):
+            next_price = current_price  # 현재 가격 사용
+        else:
+            # 다음 스텝의 가격으로 자산 계산 (정확한 보상 계산을 위해)
+            next_price = self.df.iloc[self.current_step]['close']
+
         current_net_worth = self.balance + self.crypto_held * next_price
 
-        # 보상 계산: 자산 변화율
-        reward = (current_net_worth - prev_net_worth) / prev_net_worth
+        # 보상 계산: 자산 변화율 (0으로 나누기 방지)
+        if prev_net_worth > 0:
+            reward = (current_net_worth - prev_net_worth) / prev_net_worth
+        else:
+            reward = 0.0
 
         # 총 수익 업데이트
         self.total_profit = current_net_worth - self.initial_balance
-
-        # 종료 조건
-        terminated = False
-        truncated = self.current_step >= len(self.df) - 1
 
         # 파산 체크
         if current_net_worth < self.initial_balance * 0.1:

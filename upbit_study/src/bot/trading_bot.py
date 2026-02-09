@@ -111,8 +111,21 @@ class TradingBot:
             action: 0=Hold, 1=Buy, 2=Sell
             current_price: 현재 가격
         """
+        # 잔고 조회 - API 오류 검증
+        accounts = self.client.get_accounts()
+        if not accounts:
+            print("❌ 계좌 정보 조회 실패 - 거래 중단")
+            return
+
         balance = self.client.get_balance('KRW')
-        crypto_balance = self.client.get_balance(self.market.split('-')[1])
+        # 마켓에서 암호화폐 심볼 추출 (예: 'KRW-BTC' -> 'BTC')
+        try:
+            crypto_symbol = self.market.split('-')[1]
+        except IndexError:
+            print(f"❌ 잘못된 마켓 형식: {self.market}")
+            return
+
+        crypto_balance = self.client.get_balance(crypto_symbol)
 
         # Hold
         if action == 0:
@@ -129,13 +142,22 @@ class TradingBot:
                     try:
                         result = self.client.buy_market_order(self.market, trade_amount)
 
-                        if 'error' not in result:
+                        # 주문 결과 상세 검증
+                        if isinstance(result, dict) and 'error' not in result and 'uuid' in result:
+                            # 주문 상태 확인 (wait/watch/done)
+                            order_uuid = result.get('uuid')
+                            print(f"✅ 매수 주문 접수: {trade_amount:,.0f} KRW @ {current_price:,.0f}")
+                            print(f"   주문 UUID: {order_uuid}")
+
+                            # 실제 체결 여부는 별도로 확인해야 하지만,
+                            # 주문이 성공적으로 접수되면 포지션 업데이트
                             self.current_position = 'long'
                             self.trade_count += 1
-                            print(f"✅ 매수 체결: {trade_amount:,.0f} KRW @ {current_price:,.0f}")
-                            print(f"   주문 UUID: {result.get('uuid', 'N/A')}")
+                        elif isinstance(result, dict) and 'error' in result:
+                            error_msg = result.get('error', {}).get('message', '알 수 없는 오류')
+                            print(f"❌ 매수 실패: {error_msg}")
                         else:
-                            print(f"❌ 매수 실패: {result['error']['message']}")
+                            print(f"❌ 매수 실패: 예상치 못한 응답 형식")
 
                     except Exception as e:
                         print(f"❌ 매수 오류: {str(e)}")
@@ -148,13 +170,20 @@ class TradingBot:
                 try:
                     result = self.client.sell_market_order(self.market, crypto_balance)
 
-                    if 'error' not in result:
+                    # 주문 결과 상세 검증
+                    if isinstance(result, dict) and 'error' not in result and 'uuid' in result:
+                        order_uuid = result.get('uuid')
+                        print(f"✅ 매도 주문 접수: {crypto_balance:.8f} @ {current_price:,.0f}")
+                        print(f"   주문 UUID: {order_uuid}")
+
+                        # 포지션 정리
                         self.current_position = None
                         self.trade_count += 1
-                        print(f"✅ 매도 체결: {crypto_balance:.8f} @ {current_price:,.0f}")
-                        print(f"   주문 UUID: {result.get('uuid', 'N/A')}")
+                    elif isinstance(result, dict) and 'error' in result:
+                        error_msg = result.get('error', {}).get('message', '알 수 없는 오류')
+                        print(f"❌ 매도 실패: {error_msg}")
                     else:
-                        print(f"❌ 매도 실패: {result['error']['message']}")
+                        print(f"❌ 매도 실패: 예상치 못한 응답 형식")
 
                 except Exception as e:
                     print(f"❌ 매도 오류: {str(e)}")

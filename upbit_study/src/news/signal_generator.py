@@ -210,29 +210,35 @@ class NewsSignalGenerator:
         Returns:
             (signal, confidence) 튜플
         """
-        # 뉴스 수에 따른 기본 신뢰도 (5개 이상이면 기본 50%)
-        base_confidence = min(0.5, news_count / 10)
+        # 뉴스 수에 따른 신뢰도 가중치 (뉴스가 많을수록 신뢰도 증가)
+        news_weight = min(1.0, news_count / 10)
 
         if positive_ratio > self.BUY_THRESHOLD:
-            # 매수 신호
+            # 매수 신호 (0.6 초과)
             # 0.6 초과 시 기본 60% + 추가 (최대 100%)
             extra = (positive_ratio - self.BUY_THRESHOLD) / (1.0 - self.BUY_THRESHOLD)
-            confidence = 0.6 + (extra * 0.4)
-            return self.SIGNAL_BUY, min(1.0, confidence)
+            base_confidence = 0.6 + (extra * 0.4)
+            confidence = base_confidence * news_weight
+            return self.SIGNAL_BUY, min(1.0, max(0.5, confidence))
 
         elif positive_ratio < self.SELL_THRESHOLD:
-            # 매도 신호
+            # 매도 신호 (0.4 미만)
             # 0.4 미만 시 기본 60% + 추가 (최대 100%)
             extra = (self.SELL_THRESHOLD - positive_ratio) / self.SELL_THRESHOLD
-            confidence = 0.6 + (extra * 0.4)
-            return self.SIGNAL_SELL, min(1.0, confidence)
+            base_confidence = 0.6 + (extra * 0.4)
+            confidence = base_confidence * news_weight
+            return self.SIGNAL_SELL, min(1.0, max(0.5, confidence))
 
         else:
             # 보유 신호 (0.4 ~ 0.6)
             # 0.5에 가까울수록 신뢰도 높음
+            # distance_from_center가 0.1일 때 (0.4 또는 0.6) confidence = 50%
+            # distance_from_center가 0일 때 (0.5) confidence = 100%
             distance_from_center = abs(positive_ratio - 0.5)
-            confidence = 0.5 + (0.5 - distance_from_center) * 5  # 0.5일 때 100%, 0.4/0.6일 때 50%
-            return self.SIGNAL_HOLD, max(0.5, min(1.0, confidence))
+            # 정규화: 0 ~ 0.1 범위를 1.0 ~ 0.5로 변환
+            base_confidence = 1.0 - (distance_from_center / 0.1) * 0.5
+            confidence = base_confidence * news_weight
+            return self.SIGNAL_HOLD, min(1.0, max(0.5, confidence))
 
     def _get_signal_korean(self, signal: str) -> str:
         """신호의 한국어 레이블 반환"""

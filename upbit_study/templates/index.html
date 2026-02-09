@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>업비트 종목 분석 시스템</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -182,6 +183,11 @@
                         :class="activeTab === 'trading' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'"
                         class="px-6 py-3 font-medium transition">
                     <i class="fas fa-robot mr-1"></i> 자동매매
+                </button>
+                <button @click="selectedMarket = null; activeTab = 'lstm-trader';"
+                        :class="activeTab === 'lstm-trader' ? 'border-b-2 border-green-600 text-green-600' : 'text-gray-600'"
+                        class="px-6 py-3 font-medium transition">
+                    <i class="fas fa-bolt mr-1"></i> LSTM 단타
                 </button>
                 <button @click="activeTab = 'settings'"
                         :class="activeTab === 'settings' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'"
@@ -1733,7 +1739,974 @@ UPBIT_SECRET_KEY=your_secret_key</pre>
                     </div>
                 </div>
             </div>
+            </div>
 
+            <!-- LSTM 단타 -->
+            <div id="lstm-trader-container" x-show="activeTab === 'lstm-trader'" class="p-6" x-init="setTimeout(() => { try { getLstmStatus(); loadLstmModels(); getLstmScalpingStatus(); getUnifiedLstmStatus(); } catch(e) { console.error('LSTM init error', e); } }, 0); $watch('activeTab', val => { if(val === 'lstm-trader'){ setTimeout(()=>{ try{ getLstmStatus(); loadLstmModels(); ensureLstmVisible(); getLstmScalpingStatus(); getUnifiedLstmStatus(); }catch(e){console.error('LSTM activeTab watch error', e);} },0) } }); $watch('lstmSelectedMarket', val => setTimeout(() => { try { loadLstmModels(); getLstmStatus(); } catch(e) { console.error('LSTM market watch error', e); } }, 0))">
+                <div class="flex items-center justify-between mb-6">
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-900">LSTM 단타 트레이더</h3>
+                        <p class="text-sm text-gray-500 mt-1">원하는 코인으로 모델을 학습하고 즉시 예측 결과를 확인할 수 있습니다.</p>
+                    </div>
+                </div>
+                <!-- 모델 상태 요약 및 관리 -->
+                <div class="mb-4 p-4 border rounded bg-white shadow">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-4">
+                            <div class="flex items-center gap-2">
+                                <i class="fas fa-brain text-purple-600"></i>
+                                <span class="font-medium">개별 모델: <span x-text="lstmModels.length" class="text-blue-600"></span>개</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <i class="fas fa-layer-group text-green-600"></i>
+                                <span class="font-medium">통합 모델:
+                                    <span :class="unifiedLstmStatus?.model_exists ? 'text-green-600' : 'text-gray-400'"
+                                          x-text="unifiedLstmStatus?.model_exists ? '있음' : '없음'"></span>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button @click="loadLstmModels()" class="px-3 py-1 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200">
+                                <i class="fas fa-sync-alt mr-1"></i>새로고침
+                            </button>
+                            <button @click="openModelManager()" class="px-3 py-1 bg-purple-600 text-white rounded text-sm hover:bg-purple-700">
+                                <i class="fas fa-folder-open mr-1"></i>모델 관리
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                    <div class="card p-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <label class="block text-sm font-medium text-gray-700">학습할 코인 선택</label>
+                            <div class="flex items-center gap-1">
+                                <button @click="lstmShowMarketSelector = true" class="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">
+                                    <i class="fas fa-plus mr-1"></i>추가
+                                </button>
+                                <button @click="selectAllLstmMarkets()" class="text-xs px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700" title="모든 코인 선택">
+                                    <i class="fas fa-star mr-1"></i>전체
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- 선택된 코인 목록 -->
+                        <div class="mb-3 flex flex-wrap gap-2">
+                            <template x-for="market in lstmSelectedMarkets" :key="market">
+                                <div class="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm">
+                                    <span x-text="market"></span>
+                                    <button @click="toggleLstmMarket(market)" class="text-blue-500 hover:text-blue-700 font-bold">×</button>
+                                </div>
+                            </template>
+                            <div x-show="lstmSelectedMarkets.length === 0" class="text-sm text-gray-500">
+                                코인을 선택해주세요
+                            </div>
+                        </div>
+
+                        <div class="mt-4">
+                            <label class="block text-sm font-medium text-gray-700">저장된 모델</label>
+                            <div class="flex items-center gap-2 mt-2">
+                                <select x-model="lstmSelectedModel" class="flex-1 px-3 py-2 border rounded-lg">
+                                    <template x-if="lstmModels.length === 0">
+                                        <option value="">(저장된 모델 없음)</option>
+                                    </template>
+                                    <template x-for="m in lstmModels" :key="m.file">
+                                        <option :value="m.file" x-text="m.file"></option>
+                                    </template>
+                                </select>
+                                <button :disabled="!lstmSelectedModel" class="px-3 py-2 bg-blue-600 text-white rounded disabled:opacity-40" @click.prevent="loadLstmModel()">로드</button>
+                                <button :disabled="!lstmSelectedModel" class="px-3 py-2 bg-red-600 text-white rounded disabled:opacity-40" @click.prevent="deleteLstmModel()">삭제</button>
+                            </div>
+                            <p class="mt-2 text-sm" x-html="lstmLoadedModel ? ('<span class=\'text-green-600\'>로드된 모델: ' + lstmLoadedModel + '</span>') : (lstmModels.length === 0 ? '<span class=\'text-gray-500\'>저장된 모델이 없습니다. 먼저 학습을 실행하세요.</span>' : '<span class=\'text-gray-500\'>모델이 로드되어 있지 않습니다.</span>')"></p>
+                        </div>
+                        <div class="mt-3 grid grid-cols-3 gap-2">
+                            <input type="number" x-model.number="lstmEpochs" class="px-2 py-2 border rounded" />
+                            <input type="number" x-model.number="lstmBatchSize" class="px-2 py-2 border rounded" />
+                            <input type="number" x-model.number="lstmSeqLength" class="px-2 py-2 border rounded" />
+                        </div>
+                        <div class="mt-2 text-xs text-gray-500">Epochs / Batch / Seq Length</div>
+                    </div>
+
+                    <div class="card p-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">학습률</label>
+                        <input type="number" x-model.number="lstmLearningRate" step="0.0001" class="w-full px-3 py-2 border rounded-lg" />
+                        <div class="mt-3 flex flex-col gap-2">
+                            <div class="flex items-center gap-2">
+                                <button @click="startLstmTraining()" class="flex-1 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
+                                    <i class="fas fa-play mr-1"></i>학습 시작
+                                </button>
+                                <button @click="getLstmStatus()" class="px-4 py-2 bg-gray-100 rounded hover:bg-gray-200">
+                                    <i class="fas fa-sync-alt mr-1"></i>상태 갱신
+                                </button>
+                            </div>
+                            <button @click="startAllLstmTraining()" class="w-full px-4 py-3 bg-purple-600 text-white rounded hover:bg-purple-700 font-semibold">
+                                <i class="fas fa-rocket mr-2"></i>전체 코인 학습 시작
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="card p-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">학습 상태</label>
+                        
+                        <!-- 개별 학습 상태 -->
+                        <div class="mb-4">
+                            <div class="text-sm font-medium text-gray-600 mb-1">선택된 코인</div>
+                            <div class="p-2 bg-gray-50 rounded text-sm" x-text="lstmTrainingStatus?.status || '대기 중'"></div>
+                            <div class="mt-2 text-xs text-gray-500" x-text="lstmTrainingStatus?.message || ''"></div>
+                        </div>
+
+                        <!-- 전체 학습 통계 -->
+                        <div class="border-t pt-3">
+                            <div class="text-sm font-medium text-gray-600 mb-2">전체 학습 통계</div>
+                            <div class="grid grid-cols-2 gap-2 text-xs">
+                                <div class="p-2 bg-green-50 rounded">
+                                    <div class="text-gray-600">진행 중</div>
+                                    <div class="font-bold text-green-600" x-text="lstmAllStatus?.running || 0"></div>
+                                </div>
+                                <div class="p-2 bg-purple-50 rounded">
+                                    <div class="text-gray-600">대기 중</div>
+                                    <div class="font-bold text-purple-600" x-text="lstmAllStatus?.queued || 0"></div>
+                                </div>
+                                <div class="p-2 bg-blue-50 rounded">
+                                    <div class="text-gray-600">완료됨</div>
+                                    <div class="font-bold text-blue-600" x-text="lstmAllStatus?.completed || 0"></div>
+                                </div>
+                                <div class="p-2 bg-red-50 rounded">
+                                    <div class="text-gray-600">오류</div>
+                                    <div class="font-bold text-red-600" x-text="lstmAllStatus?.error || 0"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mt-3 flex items-center gap-2">
+                            <button @click="getLstmPrediction()" class="px-4 py-2 bg-blue-600 text-white rounded text-sm">예측 실행</button>
+                            <button @click="applyLstmToTrading()" class="px-4 py-2 bg-indigo-600 text-white rounded ml-2">거래 탭으로 이동</button>
+                            <button @click="cancelLstmTraining()" class="px-4 py-2 bg-red-600 text-white rounded ml-2">학습 취소</button>
+                            <button @click="startLstmLogStream()" class="px-4 py-2 bg-gray-100 rounded ml-2">로그 보기</button>
+                        </div>
+                        <div class="mt-3">
+                            <div x-show="lstmPrediction">
+                                <div>예측가: <span x-text="(lstmPrediction && lstmPrediction.predicted_price) ? '₩ ' + formatPrice(lstmPrediction.predicted_price) : '-'"></span></div>
+                                <div>변화율: <span x-text="(lstmPrediction && lstmPrediction.change_rate) ? lstmPrediction.change_rate.toFixed(2) + '%' : '-'"></span></div>
+                                <div>방향: <span x-text="(lstmPrediction && lstmPrediction.direction) ? lstmPrediction.direction : '-'"></span></div>
+                            </div>
+
+                            <div x-show="lstmLogs && lstmLogs.length > 0" class="mt-3 bg-black text-green-200 p-3 rounded max-h-40 overflow-auto text-xs font-mono">
+                                <template x-for="(log, i) in lstmLogs" :key="i">
+                                    <div x-text="log"></div>
+                                </template>
+                                <div class="mt-2">
+                                    <button @click="stopLstmLogStream()" class="px-3 py-1 bg-gray-200 rounded text-xs">로그 닫기</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 통합 LSTM 모델 섹션 -->
+                <div class="mt-6 border-t pt-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <h3 class="text-lg font-semibold text-gray-900">
+                                <i class="fas fa-brain mr-2 text-purple-600"></i>통합 LSTM 모델
+                            </h3>
+                            <p class="text-sm text-gray-500 mt-1">여러 코인의 차트 패턴을 통합 학습하여 하나의 범용 모델 생성</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="px-3 py-1 rounded-full text-xs font-medium"
+                                  :class="unifiedLstmStatus?.model_exists ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'">
+                                <i class="fas fa-check-circle mr-1" x-show="unifiedLstmStatus?.model_exists"></i>
+                                <span x-text="unifiedLstmStatus?.model_exists ? '모델 있음' : '모델 없음'"></span>
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                        <!-- 통합 모델 학습 -->
+                        <div class="card p-4">
+                            <h4 class="font-medium text-gray-800 mb-3"><i class="fas fa-graduation-cap mr-2"></i>통합 모델 학습</h4>
+
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">학습 코인 수</label>
+                                    <div class="flex items-center gap-2">
+                                        <input type="number" x-model.number="unifiedLstmSettings.min_coins"
+                                               min="5" max="50" class="flex-1 px-3 py-2 border rounded text-sm">
+                                        <span class="text-xs text-gray-500">최소 5개</span>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">학습 에폭</label>
+                                    <input type="number" x-model.number="unifiedLstmSettings.epochs"
+                                           min="10" max="500" class="w-full px-3 py-2 border rounded text-sm">
+                                </div>
+
+                                <div class="p-3 bg-purple-50 rounded text-sm">
+                                    <div class="font-medium text-purple-800 mb-1">통합 모델의 장점</div>
+                                    <ul class="text-purple-700 text-xs space-y-1">
+                                        <li>• 다양한 코인의 패턴을 종합 학습</li>
+                                        <li>• 새로운 코인에도 적용 가능</li>
+                                        <li>• 과적합(overfitting) 방지</li>
+                                        <li>• 하나의 모델로 모든 코인 예측</li>
+                                    </ul>
+                                </div>
+
+                                <button @click="trainUnifiedLstm()"
+                                        :disabled="unifiedLstmStatus?.is_training || lstmSelectedMarkets.length < 5"
+                                        class="w-full px-4 py-3 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition">
+                                    <i class="fas fa-brain mr-2"></i>
+                                    <span x-text="unifiedLstmStatus?.is_training ? '학습 중...' : '통합 모델 학습 시작'"></span>
+                                </button>
+
+                                <div class="text-xs text-gray-500 text-center">
+                                    상단에서 <span x-text="unifiedLstmSettings.min_coins"></span>개 이상 코인을 선택한 후 학습하세요
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 학습 상태 및 예측 -->
+                        <div class="card p-4">
+                            <h4 class="font-medium text-gray-800 mb-3"><i class="fas fa-chart-bar mr-2"></i>상태 및 예측</h4>
+
+                            <!-- 학습 진행률 -->
+                            <div x-show="unifiedLstmStatus?.is_training" class="mb-4">
+                                <div class="flex justify-between text-sm mb-1">
+                                    <span>학습 진행률</span>
+                                    <span x-text="unifiedLstmStatus?.current_epoch + '/' + unifiedLstmStatus?.total_epochs"></span>
+                                </div>
+                                <div class="w-full bg-gray-200 rounded-full h-3">
+                                    <div class="bg-purple-600 h-3 rounded-full transition-all"
+                                         :style="'width: ' + (unifiedLstmStatus?.total_epochs > 0 ? (unifiedLstmStatus?.current_epoch / unifiedLstmStatus?.total_epochs * 100) : 0) + '%'"></div>
+                                </div>
+                                <div class="flex justify-between text-xs text-gray-500 mt-1">
+                                    <span>손실: <span x-text="(unifiedLstmStatus?.loss || 0).toFixed(4)"></span></span>
+                                    <span>정확도: <span x-text="((unifiedLstmStatus?.accuracy || 0) * 100).toFixed(1) + '%'"></span></span>
+                                </div>
+                                <div class="text-xs text-purple-600 mt-2" x-text="unifiedLstmStatus?.message"></div>
+                            </div>
+
+                            <!-- 예측 테스트 -->
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">예측할 코인</label>
+                                    <select x-model="unifiedLstmPredictMarket" class="w-full px-3 py-2 border rounded text-sm">
+                                        <option value="KRW-BTC">KRW-BTC (비트코인)</option>
+                                        <option value="KRW-ETH">KRW-ETH (이더리움)</option>
+                                        <option value="KRW-XRP">KRW-XRP (리플)</option>
+                                        <option value="KRW-SOL">KRW-SOL (솔라나)</option>
+                                        <option value="KRW-DOGE">KRW-DOGE (도지코인)</option>
+                                        <template x-for="market in lstmSelectedMarkets.filter(m => !['KRW-BTC','KRW-ETH','KRW-XRP','KRW-SOL','KRW-DOGE'].includes(m))" :key="market">
+                                            <option :value="market" x-text="market"></option>
+                                        </template>
+                                    </select>
+                                </div>
+
+                                <button @click="predictUnifiedLstm()"
+                                        :disabled="!unifiedLstmStatus?.model_exists"
+                                        class="w-full px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 transition">
+                                    <i class="fas fa-magic mr-2"></i>예측 실행
+                                </button>
+
+                                <!-- 예측 결과 -->
+                                <div x-show="unifiedLstmPrediction" class="p-3 bg-gray-50 rounded">
+                                    <div class="text-sm font-medium mb-2">
+                                        <span x-text="unifiedLstmPredictMarket"></span> 예측 결과
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-2 text-sm">
+                                        <div>
+                                            <div class="text-gray-500 text-xs">방향</div>
+                                            <div class="font-bold"
+                                                 :class="{
+                                                     'text-green-600': unifiedLstmPrediction?.direction_en === 'UP',
+                                                     'text-red-600': unifiedLstmPrediction?.direction_en === 'DOWN',
+                                                     'text-gray-600': unifiedLstmPrediction?.direction_en === 'NEUTRAL'
+                                                 }"
+                                                 x-text="unifiedLstmPrediction?.direction"></div>
+                                        </div>
+                                        <div>
+                                            <div class="text-gray-500 text-xs">예상 변화율</div>
+                                            <div class="font-bold"
+                                                 :class="(unifiedLstmPrediction?.predicted_change_rate || 0) >= 0 ? 'text-green-600' : 'text-red-600'"
+                                                 x-text="((unifiedLstmPrediction?.predicted_change_rate || 0) >= 0 ? '+' : '') + (unifiedLstmPrediction?.predicted_change_rate || 0).toFixed(3) + '%'"></div>
+                                        </div>
+                                        <div>
+                                            <div class="text-gray-500 text-xs">현재가</div>
+                                            <div x-text="formatPrice(unifiedLstmPrediction?.current_price)"></div>
+                                        </div>
+                                        <div>
+                                            <div class="text-gray-500 text-xs">예측가</div>
+                                            <div x-text="formatPrice(unifiedLstmPrediction?.predicted_price)"></div>
+                                        </div>
+                                        <div class="col-span-2">
+                                            <div class="text-gray-500 text-xs">신뢰도</div>
+                                            <div class="w-full bg-gray-200 rounded-full h-2 mt-1">
+                                                <div class="bg-blue-600 h-2 rounded-full"
+                                                     :style="'width: ' + ((unifiedLstmPrediction?.confidence || 0) * 100) + '%'"></div>
+                                            </div>
+                                            <div class="text-xs text-right" x-text="((unifiedLstmPrediction?.confidence || 0) * 100).toFixed(1) + '%'"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- LSTM 단타 자동매매 섹션 -->
+                <div class="mt-6 border-t pt-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <h3 class="text-lg font-semibold text-gray-900">LSTM 단타 자동매매</h3>
+                            <p class="text-sm text-gray-500 mt-1">학습된 LSTM 모델과 다양한 단타 알고리즘을 활용한 자동매매</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm" :class="lstmScalpingStatus?.is_running ? 'text-green-600' : 'text-gray-500'">
+                                <i class="fas fa-circle text-xs mr-1"></i>
+                                <span x-text="lstmScalpingStatus?.is_running ? '자동매매 실행 중' : '대기 중'"></span>
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+                        <!-- 거래 설정 패널 -->
+                        <div class="card p-4">
+                            <h4 class="font-medium text-gray-800 mb-3"><i class="fas fa-cog mr-2"></i>거래 설정</h4>
+
+                            <div class="space-y-3">
+                                <!-- 통합 모델 사용 토글 -->
+                                <div class="flex items-center justify-between p-2 bg-purple-50 rounded">
+                                    <div>
+                                        <label class="text-sm font-medium text-purple-800">통합 LSTM 모델 사용</label>
+                                        <p class="text-xs text-purple-600">모든 코인에 적용 가능한 통합 모델</p>
+                                    </div>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" x-model="lstmScalpingSettings.use_unified_model" class="sr-only peer">
+                                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                                    </label>
+                                </div>
+
+                                <!-- 자동 코인 탐색 모드 -->
+                                <div class="flex items-center justify-between p-2 bg-green-50 rounded" x-show="lstmScalpingSettings.use_unified_model">
+                                    <div>
+                                        <label class="text-sm font-medium text-green-800">자동 코인 탐색 모드</label>
+                                        <p class="text-xs text-green-600">AI가 유망한 코인을 자동으로 찾아 거래</p>
+                                    </div>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" x-model="lstmScalpingSettings.auto_discover" class="sr-only peer">
+                                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                                    </label>
+                                </div>
+
+                                <!-- 자동 탐색 설정 (자동 탐색 모드일 때만 표시) -->
+                                <div x-show="lstmScalpingSettings.auto_discover && lstmScalpingSettings.use_unified_model" class="p-3 bg-green-50 rounded-lg border border-green-200">
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block text-xs text-green-700 mb-1">모니터링 코인 수</label>
+                                            <input type="number" x-model.number="lstmScalpingSettings.top_coin_count"
+                                                   min="3" max="20" class="w-full px-2 py-1 border border-green-300 rounded text-sm">
+                                            <span class="text-xs text-green-600">상위 N개 코인 모니터링</span>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-green-700 mb-1">탐색 주기 (초)</label>
+                                            <input type="number" x-model.number="lstmScalpingSettings.scan_interval"
+                                                   min="60" max="600" step="60" class="w-full px-2 py-1 border border-green-300 rounded text-sm">
+                                            <span class="text-xs text-green-600">전체 스캔 간격</span>
+                                        </div>
+                                    </div>
+                                    <p class="text-xs text-green-700 mt-2">
+                                        <i class="fas fa-info-circle mr-1"></i>
+                                        거래량, 변동성, RSI, LSTM 신호를 종합 분석하여 유망 코인을 자동 선정합니다.
+                                    </p>
+                                </div>
+
+                                <!-- 거래 코인 선택 (자동 탐색이 아닐 때만 표시) -->
+                                <div x-show="!lstmScalpingSettings.auto_discover">
+                                    <label class="block text-sm text-gray-600 mb-1">거래할 코인</label>
+                                    <div class="flex flex-wrap gap-1 mb-2 max-h-20 overflow-y-auto p-2 bg-gray-50 rounded">
+                                        <template x-for="market in lstmScalpingMarkets" :key="market">
+                                            <span class="inline-flex items-center px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
+                                                <span x-text="market"></span>
+                                                <button @click="removeLstmScalpingMarket(market)" class="ml-1 text-blue-500 hover:text-blue-700">×</button>
+                                            </span>
+                                        </template>
+                                        <span x-show="lstmScalpingMarkets.length === 0" class="text-xs text-gray-500">코인을 선택하세요</span>
+                                    </div>
+                                    <!-- 통합 모델 사용 시: 모든 코인 선택 가능 -->
+                                    <template x-if="lstmScalpingSettings.use_unified_model">
+                                        <select @change="addLstmScalpingMarket($event.target.value); $event.target.value=''" class="w-full px-3 py-2 border border-purple-300 rounded text-sm bg-purple-50">
+                                            <option value="">+ 코인 추가 (통합 모델 - 모든 코인)</option>
+                                            <template x-for="m in markets" :key="m.market">
+                                                <option :value="m.market" x-text="m.market + ' (' + m.korean_name + ')'"></option>
+                                            </template>
+                                        </select>
+                                    </template>
+                                    <!-- 개별 모델 사용 시: 학습된 모델만 선택 가능 -->
+                                    <template x-if="!lstmScalpingSettings.use_unified_model">
+                                        <select @change="addLstmScalpingMarket($event.target.value); $event.target.value=''" class="w-full px-3 py-2 border rounded text-sm">
+                                            <option value="">+ 코인 추가 (학습된 개별 모델만)</option>
+                                            <template x-for="m in lstmModels" :key="m.file">
+                                                <option :value="m.market" x-text="m.market + ' (' + m.file + ')'"></option>
+                                            </template>
+                                        </select>
+                                    </template>
+                                    <p class="text-xs mt-1" :class="lstmScalpingSettings.use_unified_model ? 'text-purple-600' : 'text-gray-500'">
+                                        <span x-show="lstmScalpingSettings.use_unified_model">통합 모델 사용: 모든 KRW 마켓 선택 가능</span>
+                                        <span x-show="!lstmScalpingSettings.use_unified_model">개별 모델 사용: 학습된 코인만 선택 가능</span>
+                                    </p>
+                                </div>
+
+                                <!-- 1회 거래 금액 -->
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">1회 거래 금액 (KRW)</label>
+                                    <input type="number" x-model.number="lstmScalpingSettings.trade_amount"
+                                           min="10000" step="10000"
+                                           class="w-full px-3 py-2 border rounded text-sm" placeholder="10000">
+                                    <span class="text-xs text-gray-500">최소 10,000원</span>
+                                </div>
+
+                                <!-- 최대 포지션 수 -->
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">최대 동시 포지션</label>
+                                    <input type="number" x-model.number="lstmScalpingSettings.max_positions"
+                                           min="1" max="10"
+                                           class="w-full px-3 py-2 border rounded text-sm" placeholder="3">
+                                </div>
+
+                                <!-- 체크 간격 -->
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">체크 간격 (초)</label>
+                                    <input type="number" x-model.number="lstmScalpingSettings.check_interval"
+                                           min="5" max="300"
+                                           class="w-full px-3 py-2 border rounded text-sm" placeholder="30">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 고급 알고리즘 설정 -->
+                        <div class="card p-4">
+                            <h4 class="font-medium text-gray-800 mb-3"><i class="fas fa-sliders-h mr-2"></i>알고리즘 설정</h4>
+
+                            <div class="space-y-3">
+                                <!-- LSTM 가중치 슬라이더 -->
+                                <div>
+                                    <label class="block text-sm text-gray-600 mb-1">
+                                        LSTM 신호 가중치: <span x-text="(lstmScalpingSettings.lstm_weight * 100).toFixed(0) + '%'"></span>
+                                    </label>
+                                    <input type="range" x-model.number="lstmScalpingSettings.lstm_weight"
+                                           min="0" max="1" step="0.1"
+                                           class="w-full">
+                                    <div class="flex justify-between text-xs text-gray-500">
+                                        <span>기술적 지표</span>
+                                        <span>LSTM</span>
+                                    </div>
+                                </div>
+
+                                <!-- 급락 감지 토글 -->
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm text-gray-600">급락 감지 (즉시 매도)</label>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" x-model="lstmScalpingSettings.crash_detection" class="sr-only peer">
+                                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
+                                    </label>
+                                </div>
+
+                                <!-- 추세 반전 감지 토글 -->
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm text-gray-600">추세 반전 감지</label>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" x-model="lstmScalpingSettings.trend_reversal" class="sr-only peer">
+                                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
+                                    </label>
+                                </div>
+
+                                <!-- 동적 손절/익절 토글 -->
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm text-gray-600">동적 손절/익절 (ATR)</label>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" x-model="lstmScalpingSettings.dynamic_stops" class="sr-only peer">
+                                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-500"></div>
+                                    </label>
+                                </div>
+
+                                <!-- 기본 익절/손절률 -->
+                                <div class="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">익절률 (%)</label>
+                                        <input type="number" x-model.number="lstmScalpingSettings.take_profit"
+                                               min="0.1" max="10" step="0.1"
+                                               class="w-full px-2 py-1 border rounded text-sm" placeholder="0.5">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">손절률 (%)</label>
+                                        <input type="number" x-model.number="lstmScalpingSettings.stop_loss"
+                                               min="0.1" max="10" step="0.1"
+                                               class="w-full px-2 py-1 border rounded text-sm" placeholder="0.3">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 제어 및 실시간 상태 -->
+                        <div class="card p-4">
+                            <h4 class="font-medium text-gray-800 mb-3"><i class="fas fa-chart-line mr-2"></i>실시간 상태</h4>
+
+                            <!-- 통계 표시 -->
+                            <div class="grid grid-cols-2 gap-2 mb-4">
+                                <div class="p-2 bg-green-50 rounded text-center">
+                                    <div class="text-xs text-gray-600">승률</div>
+                                    <div class="text-lg font-bold text-green-600" x-text="(lstmScalpingStatus?.stats?.win_rate || 0).toFixed(1) + '%'"></div>
+                                </div>
+                                <div class="p-2 bg-blue-50 rounded text-center">
+                                    <div class="text-xs text-gray-600">총 거래</div>
+                                    <div class="text-lg font-bold text-blue-600" x-text="lstmScalpingStatus?.stats?.total_trades || 0"></div>
+                                </div>
+                                <div class="p-2 bg-purple-50 rounded text-center">
+                                    <div class="text-xs text-gray-600">총 수익</div>
+                                    <div class="text-lg font-bold"
+                                         :class="(lstmScalpingStatus?.stats?.total_profit || 0) >= 0 ? 'text-green-600' : 'text-red-600'"
+                                         x-text="formatPrice(lstmScalpingStatus?.stats?.total_profit || 0) + ' KRW'"></div>
+                                </div>
+                                <div class="p-2 bg-orange-50 rounded text-center">
+                                    <div class="text-xs text-gray-600">활성 포지션</div>
+                                    <div class="text-lg font-bold text-orange-600" x-text="Object.keys(lstmScalpingStatus?.positions || {}).length"></div>
+                                </div>
+                            </div>
+
+                            <!-- 제어 버튼 -->
+                            <div class="space-y-2">
+                                <button @click="startLstmScalping()"
+                                        :disabled="lstmScalpingStatus?.is_running || lstmScalpingMarkets.length === 0"
+                                        class="w-full px-4 py-3 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition">
+                                    <i class="fas fa-play mr-2"></i>자동매매 시작
+                                </button>
+                                <button @click="stopLstmScalping()"
+                                        :disabled="!lstmScalpingStatus?.is_running"
+                                        class="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition">
+                                    <i class="fas fa-stop mr-2"></i>자동매매 중지
+                                </button>
+                                <button @click="emergencySellAll()"
+                                        :disabled="Object.keys(lstmScalpingStatus?.positions || {}).length === 0"
+                                        class="w-full px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 disabled:opacity-50 disabled:cursor-not-allowed transition">
+                                    <i class="fas fa-exclamation-triangle mr-2"></i>긴급 전체 매도
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 포지션 테이블 -->
+                    <div class="card p-4" x-show="Object.keys(lstmScalpingStatus?.positions || {}).length > 0">
+                        <h4 class="font-medium text-gray-800 mb-3"><i class="fas fa-wallet mr-2"></i>현재 포지션</h4>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-3 py-2 text-left">코인</th>
+                                        <th class="px-3 py-2 text-right">진입가</th>
+                                        <th class="px-3 py-2 text-right">현재가</th>
+                                        <th class="px-3 py-2 text-right">수익률</th>
+                                        <th class="px-3 py-2 text-center">LSTM 예측</th>
+                                        <th class="px-3 py-2 text-center">보유시간</th>
+                                        <th class="px-3 py-2 text-center">액션</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template x-for="(pos, market) in lstmScalpingStatus?.positions || {}" :key="market">
+                                        <tr class="border-t hover:bg-gray-50">
+                                            <td class="px-3 py-2 font-medium" x-text="market"></td>
+                                            <td class="px-3 py-2 text-right" x-text="formatPrice(pos.entry_price)"></td>
+                                            <td class="px-3 py-2 text-right" x-text="formatPrice(pos.current_price)"></td>
+                                            <td class="px-3 py-2 text-right font-bold"
+                                                :class="pos.profit_rate >= 0 ? 'text-green-600' : 'text-red-600'"
+                                                x-text="(pos.profit_rate >= 0 ? '+' : '') + pos.profit_rate.toFixed(2) + '%'"></td>
+                                            <td class="px-3 py-2 text-center">
+                                                <span class="px-2 py-1 rounded text-xs"
+                                                      :class="{
+                                                          'bg-green-100 text-green-700': pos.lstm_signal === 'UP' || pos.lstm_signal === 'STRONG_UP',
+                                                          'bg-red-100 text-red-700': pos.lstm_signal === 'DOWN' || pos.lstm_signal === 'STRONG_DOWN',
+                                                          'bg-gray-100 text-gray-700': pos.lstm_signal === 'NEUTRAL'
+                                                      }"
+                                                      x-text="pos.lstm_signal || 'N/A'"></span>
+                                            </td>
+                                            <td class="px-3 py-2 text-center text-gray-600" x-text="pos.holding_minutes ? pos.holding_minutes.toFixed(0) + '분' : '-'"></td>
+                                            <td class="px-3 py-2 text-center">
+                                                <button @click="emergencySellPosition(market)"
+                                                        class="px-2 py-1 bg-red-100 text-red-600 rounded text-xs hover:bg-red-200">
+                                                    매도
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- 실시간 모니터링 대시보드 -->
+                    <div class="card p-4 mt-4" x-show="lstmScalpingStatus?.is_running">
+                        <h4 class="font-medium text-gray-800 mb-3">
+                            <i class="fas fa-satellite-dish mr-2 text-green-500 animate-pulse"></i>실시간 모니터링
+                            <template x-if="lstmScalpingStatus?.auto_discover">
+                                <span class="inline-flex items-center ml-2">
+                                    <span class="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+                                        <i class="fas fa-magic mr-1"></i>자동 탐색
+                                    </span>
+                                    <span class="text-xs text-gray-500 ml-2">
+                                        (<span x-text="(lstmScalpingStatus?.markets || []).length"></span>개 유망 코인 모니터링)
+                                    </span>
+                                </span>
+                            </template>
+                            <template x-if="!lstmScalpingStatus?.auto_discover">
+                                <span class="text-xs text-gray-500 ml-2">(<span x-text="lstmScalpingMarkets.length"></span>개 코인)</span>
+                            </template>
+                        </h4>
+
+                        <!-- 모니터링 코인 그리드 -->
+                        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 mb-4">
+                            <template x-for="market in lstmScalpingStatus?.markets || lstmScalpingMarkets" :key="market">
+                                <div class="p-2 rounded-lg text-center text-xs border"
+                                     :class="{
+                                         'bg-green-100 border-green-300': lstmScalpingStatus?.positions?.[market],
+                                         'bg-gray-50 border-gray-200': !lstmScalpingStatus?.positions?.[market]
+                                     }">
+                                    <div class="font-bold" x-text="market.replace('KRW-', '')"></div>
+                                    <div x-show="lstmScalpingStatus?.positions?.[market]" class="text-green-600">
+                                        <i class="fas fa-shopping-cart"></i> 보유중
+                                    </div>
+                                    <div x-show="!lstmScalpingStatus?.positions?.[market]" class="text-gray-400">
+                                        <i class="fas fa-eye"></i> 감시중
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+
+                        <!-- 실시간 신호 로그 -->
+                        <div class="border-t pt-3">
+                            <h5 class="text-sm font-medium text-gray-700 mb-2">
+                                <i class="fas fa-bolt mr-1 text-yellow-500"></i>실시간 신호 로그
+                            </h5>
+                            <div class="bg-gray-900 rounded-lg p-3 max-h-48 overflow-y-auto font-mono text-xs" id="signal-log">
+                                <template x-for="(log, idx) in (lstmScalpingStatus?.signal_log || []).slice(-30).reverse()" :key="idx">
+                                    <div class="py-1 border-b border-gray-700"
+                                         :class="{
+                                             'text-green-400': log.signal === 'BUY' || log.signal === 'STRONG_BUY',
+                                             'text-red-400': log.signal === 'SELL' || log.signal === 'STRONG_SELL' || log.signal === 'EMERGENCY_SELL',
+                                             'text-purple-400': log.signal === 'SCAN_COMPLETE',
+                                             'text-gray-400': log.signal === 'HOLD'
+                                         }">
+                                        <span class="text-gray-500" x-text="log.time"></span>
+                                        <span class="text-blue-400 ml-2" x-text="'[' + log.market + ']'"></span>
+                                        <span class="ml-2" x-text="log.signal"></span>
+                                        <template x-if="log.signal !== 'SCAN_COMPLETE'">
+                                            <span class="text-yellow-400 ml-2" x-text="'신뢰도: ' + (log.confidence * 100).toFixed(0) + '%'"></span>
+                                        </template>
+                                        <span class="text-gray-500 ml-2" x-text="log.reason || ''"></span>
+                                    </div>
+                                </template>
+                                <div x-show="!(lstmScalpingStatus?.signal_log || []).length" class="text-gray-500 text-center py-4">
+                                    신호 대기 중...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 최근 거래 내역 -->
+                    <div class="card p-4 mt-4" x-show="(lstmScalpingStatus?.trade_history || []).length > 0">
+                        <h4 class="font-medium text-gray-800 mb-3"><i class="fas fa-history mr-2"></i>최근 거래 내역</h4>
+                        <div class="overflow-x-auto max-h-40 overflow-y-auto">
+                            <table class="w-full text-sm">
+                                <thead class="bg-gray-50 sticky top-0">
+                                    <tr>
+                                        <th class="px-3 py-2 text-left">시간</th>
+                                        <th class="px-3 py-2 text-left">코인</th>
+                                        <th class="px-3 py-2 text-center">타입</th>
+                                        <th class="px-3 py-2 text-right">가격</th>
+                                        <th class="px-3 py-2 text-right">수익률</th>
+                                        <th class="px-3 py-2 text-left">사유</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template x-for="(trade, idx) in (lstmScalpingStatus?.trade_history || []).slice(-20).reverse()" :key="idx">
+                                        <tr class="border-t">
+                                            <td class="px-3 py-2 text-gray-600 text-xs" x-text="trade.time"></td>
+                                            <td class="px-3 py-2 font-medium" x-text="trade.market"></td>
+                                            <td class="px-3 py-2 text-center">
+                                                <span class="px-2 py-1 rounded text-xs"
+                                                      :class="trade.type === 'BUY' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'"
+                                                      x-text="trade.type"></span>
+                                            </td>
+                                            <td class="px-3 py-2 text-right" x-text="formatPrice(trade.price)"></td>
+                                            <td class="px-3 py-2 text-right"
+                                                :class="(trade.profit_rate || 0) >= 0 ? 'text-green-600' : 'text-red-600'"
+                                                x-text="trade.profit_rate ? ((trade.profit_rate >= 0 ? '+' : '') + trade.profit_rate.toFixed(2) + '%') : '-'"></td>
+                                            <td class="px-3 py-2 text-xs text-gray-600" x-text="trade.reason || '-'"></td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 모델 관리 모달 -->
+            <div x-show="showModelManager"
+                 x-transition:enter="transition ease-out duration-200"
+                 x-transition:enter-start="opacity-0"
+                 x-transition:enter-end="opacity-100"
+                 class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4"
+                 @click.self="showModelManager = false">
+
+                <div class="bg-white rounded-lg max-w-4xl w-full max-h-[85vh] overflow-hidden flex flex-col"
+                     @click.stop>
+                    <!-- 헤더 -->
+                    <div class="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
+                        <div>
+                            <h3 class="text-lg font-bold text-gray-900"><i class="fas fa-folder-open mr-2"></i>모델 파일 관리</h3>
+                            <p class="text-sm text-gray-500 mt-1">
+                                총 <span x-text="modelList.length"></span>개 모델,
+                                <span x-text="modelTotalSize"></span> MB 사용 중
+                            </p>
+                        </div>
+                        <button @click="showModelManager = false" class="text-gray-400 hover:text-gray-600">
+                            <i class="fas fa-times text-xl"></i>
+                        </button>
+                    </div>
+
+                    <!-- 도구 모음 -->
+                    <div class="border-b px-6 py-3 flex items-center justify-between bg-gray-50">
+                        <div class="flex items-center gap-2">
+                            <button @click="toggleAllModels()" class="text-xs px-3 py-1 bg-gray-200 rounded hover:bg-gray-300">
+                                <i class="fas fa-check-double mr-1"></i>전체 선택
+                            </button>
+                            <button @click="deleteSelectedModels()"
+                                    :disabled="selectedModels.length === 0"
+                                    class="text-xs px-3 py-1 bg-red-100 text-red-600 rounded hover:bg-red-200 disabled:opacity-50">
+                                <i class="fas fa-trash mr-1"></i>선택 삭제 (<span x-text="selectedModels.length"></span>)
+                            </button>
+                            <button @click="cleanupCheckpoints()" class="text-xs px-3 py-1 bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200">
+                                <i class="fas fa-broom mr-1"></i>체크포인트 정리
+                            </button>
+                        </div>
+                        <button @click="loadModelList()" class="text-xs px-3 py-1 bg-blue-100 text-blue-600 rounded hover:bg-blue-200">
+                            <i class="fas fa-sync-alt mr-1"></i>새로고침
+                        </button>
+                    </div>
+
+                    <!-- 모델 목록 -->
+                    <div class="overflow-y-auto flex-1 p-4">
+                        <div x-show="modelListLoading" class="text-center py-8 text-gray-500">
+                            <i class="fas fa-spinner fa-spin text-2xl mb-2"></i>
+                            <p>로딩 중...</p>
+                        </div>
+
+                        <div x-show="!modelListLoading && modelList.length === 0" class="text-center py-8 text-gray-500">
+                            <i class="fas fa-folder-open text-4xl mb-3"></i>
+                            <p>저장된 모델이 없습니다</p>
+                        </div>
+
+                        <div x-show="!modelListLoading && modelList.length > 0">
+                            <!-- 통합 모델 -->
+                            <div x-show="getModelsByType('unified').length > 0" class="mb-6">
+                                <h4 class="font-medium text-purple-700 mb-2"><i class="fas fa-layer-group mr-2"></i>통합 모델</h4>
+                                <div class="space-y-2">
+                                    <template x-for="model in getModelsByType('unified')" :key="model.filename">
+                                        <div class="flex items-center justify-between p-3 bg-purple-50 rounded-lg border border-purple-100">
+                                            <div class="flex items-center gap-3">
+                                                <input type="checkbox"
+                                                       :checked="selectedModels.includes(model.filename)"
+                                                       @change="toggleModelSelection(model.filename)"
+                                                       class="w-4 h-4 rounded">
+                                                <div>
+                                                    <div class="font-medium text-gray-800" x-text="model.filename"></div>
+                                                    <div class="text-xs text-gray-500">
+                                                        <span x-text="model.size_mb + ' MB'"></span> •
+                                                        <span x-text="new Date(model.modified).toLocaleString('ko-KR')"></span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <button @click="deleteModel(model.filename)" class="px-2 py-1 text-red-600 hover:bg-red-100 rounded">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <!-- 개별 모델 (best) -->
+                            <div x-show="getModelsByType('best').length > 0" class="mb-6">
+                                <h4 class="font-medium text-green-700 mb-2"><i class="fas fa-star mr-2"></i>Best 모델</h4>
+                                <div class="space-y-2">
+                                    <template x-for="model in getModelsByType('best')" :key="model.filename">
+                                        <div class="flex items-center justify-between p-3 bg-green-50 rounded-lg border border-green-100">
+                                            <div class="flex items-center gap-3">
+                                                <input type="checkbox"
+                                                       :checked="selectedModels.includes(model.filename)"
+                                                       @change="toggleModelSelection(model.filename)"
+                                                       class="w-4 h-4 rounded">
+                                                <div>
+                                                    <div class="font-medium text-gray-800" x-text="model.filename"></div>
+                                                    <div class="text-xs text-gray-500">
+                                                        <span x-text="model.coin" class="text-green-600 font-medium"></span> •
+                                                        <span x-text="model.size_mb + ' MB'"></span> •
+                                                        <span x-text="new Date(model.modified).toLocaleString('ko-KR')"></span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <button @click="deleteModel(model.filename)" class="px-2 py-1 text-red-600 hover:bg-red-100 rounded">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <!-- 개별 모델 -->
+                            <div x-show="getModelsByType('individual').length > 0" class="mb-6">
+                                <h4 class="font-medium text-blue-700 mb-2"><i class="fas fa-cube mr-2"></i>개별 모델</h4>
+                                <div class="space-y-2">
+                                    <template x-for="model in getModelsByType('individual')" :key="model.filename">
+                                        <div class="flex items-center justify-between p-3 bg-blue-50 rounded-lg border border-blue-100">
+                                            <div class="flex items-center gap-3">
+                                                <input type="checkbox"
+                                                       :checked="selectedModels.includes(model.filename)"
+                                                       @change="toggleModelSelection(model.filename)"
+                                                       class="w-4 h-4 rounded">
+                                                <div>
+                                                    <div class="font-medium text-gray-800" x-text="model.filename"></div>
+                                                    <div class="text-xs text-gray-500">
+                                                        <span x-text="model.coin" class="text-blue-600 font-medium"></span> •
+                                                        <span x-text="model.size_mb + ' MB'"></span> •
+                                                        <span x-text="new Date(model.modified).toLocaleString('ko-KR')"></span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <button @click="deleteModel(model.filename)" class="px-2 py-1 text-red-600 hover:bg-red-100 rounded">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+
+                            <!-- 체크포인트 -->
+                            <div x-show="getModelsByType('checkpoint').length > 0">
+                                <h4 class="font-medium text-gray-600 mb-2">
+                                    <i class="fas fa-history mr-2"></i>체크포인트
+                                    <span class="text-xs text-gray-400">(삭제 권장)</span>
+                                </h4>
+                                <div class="space-y-2">
+                                    <template x-for="model in getModelsByType('checkpoint')" :key="model.filename">
+                                        <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+                                            <div class="flex items-center gap-3">
+                                                <input type="checkbox"
+                                                       :checked="selectedModels.includes(model.filename)"
+                                                       @change="toggleModelSelection(model.filename)"
+                                                       class="w-4 h-4 rounded">
+                                                <div>
+                                                    <div class="text-gray-700" x-text="model.filename"></div>
+                                                    <div class="text-xs text-gray-500">
+                                                        <span x-text="model.size_mb + ' MB'"></span> •
+                                                        <span x-text="new Date(model.modified).toLocaleString('ko-KR')"></span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <button @click="deleteModel(model.filename)" class="px-2 py-1 text-red-600 hover:bg-red-100 rounded">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 하단 버튼 -->
+                    <div class="sticky bottom-0 bg-gray-50 border-t px-6 py-4 flex justify-end">
+                        <button @click="showModelManager = false"
+                                class="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300">
+                            닫기
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LSTM 코인 선택 모달 -->
+            <div x-show="lstmShowMarketSelector"
+                 x-transition:enter="transition ease-out duration-200"
+                 x-transition:enter-start="opacity-0"
+                 x-transition:enter-end="opacity-100"
+                 class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4"
+                 @click.self="lstmShowMarketSelector = false">
+
+                <div class="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col"
+                     @click.stop>
+                    <!-- 헤더 -->
+                    <div class="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between">
+                        <h3 class="text-lg font-bold text-gray-900">학습할 코인 선택</h3>
+                        <button @click="lstmShowMarketSelector = false" class="text-gray-400 hover:text-gray-600">
+                            <i class="fas fa-times text-xl"></i>
+                        </button>
+                    </div>
+
+                    <!-- 검색 및 필터 -->
+                    <div class="border-b px-6 py-3 space-y-2">
+                        <input type="text" 
+                               x-model="lstmMarketSearch" 
+                               placeholder="코인명 검색 (예: BTC, ETH, 비트코인)" 
+                               class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                        <div class="flex items-center gap-2">
+                            <button @click="selectAllLstmMarkets()" class="text-xs px-3 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200">
+                                <i class="fas fa-check-double mr-1"></i>모두 선택
+                            </button>
+                            <button @click="clearAllLstmMarkets()" class="text-xs px-3 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200">
+                                <i class="fas fa-times mr-1"></i>모두 해제
+                            </button>
+                            <span class="text-sm text-gray-600 ml-auto">
+                                선택됨: <span class="font-bold" x-text="lstmSelectedMarkets.length"></span>개
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- 코인 목록 -->
+                    <div class="overflow-y-auto flex-1">
+                        <template x-for="market in getFilteredLstmMarkets()" :key="market.market">
+                            <div class="flex items-center px-6 py-3 border-b hover:bg-gray-50">
+                                <input type="checkbox" 
+                                       :id="'lstm-market-' + market.market"
+                                       :checked="isLstmMarketSelected(market.market)"
+                                       @change="toggleLstmMarket(market.market)"
+                                       class="w-4 h-4 text-blue-600 rounded cursor-pointer">
+                                <label :for="'lstm-market-' + market.market" class="flex-1 ml-3 cursor-pointer">
+                                    <div class="font-medium text-gray-900" x-text="market.market"></div>
+                                    <div class="text-sm text-gray-500" x-text="market.korean_name || ''"></div>
+                                </label>
+                            </div>
+                        </template>
+                        <div x-show="getFilteredLstmMarkets().length === 0" class="text-center py-8 text-gray-500">
+                            <i class="fas fa-search text-2xl mb-2"></i>
+                            <p>검색된 코인이 없습니다</p>
+                        </div>
+                    </div>
+
+                    <!-- 하단 버튼 -->
+                    <div class="sticky bottom-0 bg-gray-50 border-t px-6 py-4 flex justify-between items-center">
+                        <span class="text-sm text-gray-600">
+                            선택된 코인: <span class="font-bold" x-text="lstmSelectedMarkets.length"></span>개
+                        </span>
+                        <div class="flex items-center gap-2">
+                            <button @click="lstmShowMarketSelector = false" 
+                                    class="px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300">
+                                취소
+                            </button>
+                            <button @click="lstmShowMarketSelector = false" 
+                                    class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                                확인
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <!-- 설정 -->
             <div x-show="activeTab === 'settings'" class="p-6">
                 <h3 class="text-lg font-semibold text-gray-900 mb-4">시스템 설정</h3>
@@ -2225,6 +3198,226 @@ UPBIT_SECRET_KEY=your_secret_key</pre>
         </div>
     </div>
 
+
+
+    <!-- Axios for HTTP requests -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+
     <script src="/static/js/app.js"></script>
+
+    <!-- Client-side error/log capture (sends to /api/client-log) -->
+    <script>
+        (function(){
+            const sentMap = new Map();
+            function shouldSend(key){
+                const now = Date.now();
+                const prev = sentMap.get(key) || 0;
+                if(now - prev < 30000) return false; // 동일 메시지 30초 내 재전송 금지
+                sentMap.set(key, now);
+                return true;
+            }
+
+            function sendLog(payload){
+                try{
+                    const url = '/api/client-log';
+                    const body = JSON.stringify(payload);
+                    if(navigator.sendBeacon){
+                        const blob = new Blob([body], {type: 'application/json'});
+                        navigator.sendBeacon(url, blob);
+                        return;
+                    }
+                    fetch(url, {method:'POST', body: body, headers: {'Content-Type':'application/json'}, keepalive: true}).catch(()=>{});
+                }catch(e){console.warn('sendLog failed', e)}
+            }
+
+            // console.error hook
+            const origConsoleError = console.error;
+            console.error = function(...args){
+                try{
+                    const message = args.map(a=> (a && a.stack) ? a.stack : (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+                    const key = 'console:' + message;
+                    if(shouldSend(key)) sendLog({level:'error', message, url: location.href, userAgent: navigator.userAgent});
+                }catch(e){}
+                origConsoleError.apply(console, args);
+            };
+
+            // window.onerror
+            window.addEventListener('error', function(ev){
+                try{
+                    const message = ev.message + ' at ' + (ev.filename || '') + ':' + (ev.lineno||'') + ':' + (ev.colno||'');
+                    const stack = ev.error && ev.error.stack ? ev.error.stack : null;
+                    const key = 'onerror:' + message;
+                    if(shouldSend(key)) sendLog({level:'error', message, stack, url: location.href, userAgent: navigator.userAgent});
+                }catch(e){}
+            });
+
+            // unhandledrejection
+            window.addEventListener('unhandledrejection', function(ev){
+                try{
+                    const reason = ev.reason;
+                    const message = typeof reason === 'string' ? reason : (reason && reason.message) ? reason.message : JSON.stringify(reason);
+                    const stack = reason && reason.stack ? reason.stack : null;
+                    const key = 'rejection:' + message;
+                    if(shouldSend(key)) sendLog({level:'error', message, stack, url: location.href, userAgent: navigator.userAgent});
+                }catch(e){}
+            });
+        })();
+    </script>
+
+    <!-- Quick click/DOM watchdog for LSTM tab (non-Alpine) -->
+    <script>
+        (function(){
+            function makeBadge(msg){
+                let b = document.getElementById('lstm-debug-badge');
+                if(!b){
+                    b = document.createElement('div');
+                    b.id = 'lstm-debug-badge';
+                    b.style.position = 'fixed';
+                    b.style.top = '80px';
+                    b.style.right = '20px';
+                    b.style.zIndex = '9999';
+                    b.style.padding = '8px 10px';
+                    b.style.background = 'rgba(59,130,246,0.95)';
+                    b.style.color = '#fff';
+                    b.style.borderRadius = '6px';
+                    b.style.fontSize = '12px';
+                    document.body.appendChild(b);
+                }
+                b.textContent = msg;
+                setTimeout(()=>{ try{ b.style.opacity = '1'; }catch(e){} },0);
+            }
+
+            // 탭 버튼을 찾아 클릭 리스너 추가
+            const tabs = Array.from(document.querySelectorAll('button'));
+            const lstmBtn = tabs.find(t => (t.textContent || '').includes('LSTM'));
+
+            function forceShowLstm(reason){
+                try{
+                    // 상세 분석 모달이 열려 있으면 강제 표시 중단 (모달 UI와 충돌 방지)
+                    const modal = document.querySelector('div.fixed.inset-0.bg-black');
+                    if(modal && window.getComputedStyle(modal).display !== 'none' && window.getComputedStyle(modal).visibility !== 'hidden'){
+                        console.log('[LSTM-FORCE] modal open, abort forcing LSTM');
+                        makeBadge('LSTM force aborted: 상세 모달 열림');
+                        return false;
+                    }
+
+                    const candidate = document.getElementById('lstm-trader-container');
+                    if(!candidate){ console.warn('[LSTM-FORCE] LSTM container not found'); return false; }
+                    const cs = window.getComputedStyle(candidate);
+                    console.log('[LSTM-FORCE] found container, display:', cs.display, 'visibility:', cs.visibility, 'opacity:', cs.opacity);
+                    // 강제 표시
+                    candidate.style.display = 'block';
+                    candidate.style.visibility = 'visible';
+                    candidate.style.opacity = '1';
+                    // 내부 x-show에 의해 제어되는 자식들도 보이게 처리
+                    Array.from(candidate.querySelectorAll('[x-show]')).forEach(el => {
+                        el.style.display = 'block';
+                        el.style.visibility = 'visible';
+                        el.style.opacity = '1';
+                    });
+                    makeBadge('LSTM forced visible ('+reason+') at ' + new Date().toLocaleTimeString());
+                    console.log('[LSTM-FORCE] forced visible');
+                    return true;
+                }catch(e){ console.error('[LSTM-FORCE] error', e); return false; }
+            }
+
+            if(lstmBtn){
+                lstmBtn.addEventListener('click', function(){
+                    console.log('[LSTM-WATCH] tab clicked');
+                    makeBadge('LSTM tab clicked at ' + new Date().toLocaleTimeString());
+                    // 200ms 후에 LSTM 컨테이너 위치/스타일 진단 실행
+                    setTimeout(()=>{
+                        try{
+                            const container = document.getElementById('lstm-trader-container');
+                            if(!container){ console.warn('[LSTM-DIAG] container not found'); makeBadge('LSTM 컨테이너 없음'); return; }
+                            const cs = window.getComputedStyle(container);
+                            const rect = container.getBoundingClientRect();
+                            console.log('[LSTM-DIAG] container rect', rect, 'display', cs.display, 'visibility', cs.visibility, 'opacity', cs.opacity, 'children', container.children.length);
+                            console.log('[LSTM-DIAG] innerText snippet:', container.innerText.slice(0,200));
+                            // 강조 및 스크롤
+                            const prevOutline = container.style.outline;
+                            container.style.outline = '3px dashed rgba(59,130,246,0.9)';
+                            container.scrollIntoView({behavior:'smooth', block:'center'});
+                            // 중앙을 가리는 요소 체크
+                            const cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
+                            const topEl = document.elementFromPoint(cx, cy);
+                            console.log('[LSTM-DIAG] elementFromPoint at center:', topEl);
+                            if(topEl && topEl !== container && !container.contains(topEl)){
+                                console.warn('[LSTM-DIAG] Another element is covering container:', topEl);
+                                makeBadge('LSTM 가려짐: ' + (topEl.className || topEl.tagName));
+                            } else {
+                                makeBadge('LSTM 컨테이너 위치 확인됨');
+                            }
+                            setTimeout(()=>{ try{ container.style.outline = prevOutline; }catch(e){} }, 3000);
+                        }catch(e){ console.error('[LSTM-DIAG] error', e); makeBadge('LSTM 진단 실패'); }
+                    }, 200);
+                });
+            }
+
+            // 개발자가 수동으로 강제 보여주기 버튼을 생성 (오른쪽 상단)
+            (function addManualShowBtn(){
+                try{
+                    const b = document.createElement('button');
+                    b.textContent = '디버그 LSTM 위치';
+                    b.style.position = 'fixed';
+                    b.style.top = '48px';
+                    b.style.right = '20px';
+                    b.style.zIndex = '9999';
+                    b.className = 'px-3 py-1 bg-indigo-600 text-white rounded';
+                    b.addEventListener('click', ()=>{
+                        console.log('[LSTM-DIAG] manual trigger');
+                        // 재사용 가능한 진단 로직 호출
+                        try{
+                            const container = document.getElementById('lstm-trader-container');
+                            if(!container){ console.warn('[LSTM-DIAG] container not found'); makeBadge('LSTM 컨테이너 없음'); return; }
+                            const cs = window.getComputedStyle(container);
+                            const rect = container.getBoundingClientRect();
+                            console.log('[LSTM-DIAG] manual: rect', rect, 'display', cs.display, 'visibility', cs.visibility, 'opacity', cs.opacity);
+                            container.style.outline = '3px dashed rgba(59,130,246,0.95)';
+                            container.scrollIntoView({behavior:'smooth', block:'center'});
+                            // 확인하면 강제 표시 시도
+                            setTimeout(()=>{ if(confirm('LSTM 컨테이너가 보이지 않나요? OK를 누르면 강제 노출을 시도합니다.')){ forceShowLstm('manual-confirm'); } container.style.outline = ''; }, 500);
+                        }catch(e){ console.error('[LSTM-DIAG] manual error', e); }
+                    });
+                    document.body.appendChild(b);
+                }catch(e){console.warn('addManualShowBtn failed', e)}
+            })();
+
+            // DOM 변화 감시 (LSTM 컨테이너가 보이면 알려줌)
+            const observer = new MutationObserver((mutations)=>{
+                for(const m of mutations){
+                    if(m.addedNodes){
+                        m.addedNodes.forEach(node=>{
+                            if(node.nodeType===1 && node.querySelector){
+                                const el = node.querySelector('[x-show]');
+                                // 단순 감지: LSTM 단타 텍스트 포함 여부
+                                if(el && (el.textContent||'').includes('LSTM 단타')){
+                                    console.log('[LSTM-WATCH] LSTM container mutation observed');
+                                    makeBadge('LSTM container observed at ' + new Date().toLocaleTimeString());
+                                }
+                            }
+                        });
+                    }
+                }
+            });
+            observer.observe(document.body, {childList:true, subtree:true});
+
+            // ESC 키로 상세 모달 닫기(안전장치)
+            document.addEventListener('keydown', (ev) => {
+                try{
+                    if(ev.key === 'Escape'){
+                        const closeIcon = document.querySelector('div.fixed.inset-0 .fa-times');
+                        if(closeIcon){
+                            const btn = closeIcon.closest('button');
+                            if(btn){ btn.click(); makeBadge('ESC로 모달 닫음'); }
+                        }
+                    }
+                }catch(e){ console.warn('ESC close handler error', e); }
+            });
+
+            // 초기 안내표시
+            makeBadge('페이지 로드: LSTM 디버그 활성화');
+        })();
+    </script>
 </body>
 </html>
